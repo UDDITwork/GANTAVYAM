@@ -1,7 +1,7 @@
 # RideSync 🚗 
 ## The Future of Ride Booking
 
-![RideSync Banner](https://via.placeholder.com/1200x300)
+![GANTAVYAM](https://via.placeholder.com/1200x300)
 
 <p align="center">
   <a href="#key-features">Key Features</a> •

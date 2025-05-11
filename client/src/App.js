@@ -19,7 +19,7 @@ import ForgotPassword from './pages/ForgotPassword'
 function App() {
   return (
     <div className="App">
-      <h1>Welcome to UBER Clone</h1>
+      <h1>Welcome to GANTAVYAM</h1>
       <Routes>
         <Route path="/admin" element={<BoothAdmin />} />
         <Route path="/admin/drivers" element={<DriverList />} />

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { GoogleMap, LoadScript, Marker, DirectionsRenderer } from '@react-google-maps/api';
@@ -6,6 +6,7 @@ import { Autocomplete } from '@react-google-maps/api';
 import './UserDashboard.css';
 import moment from 'moment';
 import { io } from 'socket.io-client';
+import { debounce } from 'lodash';
 
 const GOOGLE_MAPS_API_KEY = "AIzaSyDFbjmVJoi2wDzwJNR2rrowpSEtSes1jw4";
 
@@ -64,6 +65,30 @@ const UserDashboard = () => {
   const [driverLocation, setDriverLocation] = useState(null);
   const [isTracking, setIsTracking] = useState(false);
   const [directions, setDirections] = useState(null);
+  const [estimatedArrivalTime, setEstimatedArrivalTime] = useState(null);
+  const [distanceToPickup, setDistanceToPickup] = useState(null);
+  const [previousDriverLocation, setPreviousDriverLocation] = useState(null);
+  const [isDriverMoving, setIsDriverMoving] = useState(false);
+  const [remainingRoute, setRemainingRoute] = useState(null);
+  const [lastUpdateTime, setLastUpdateTime] = useState(null);
+  const [driverRating, setDriverRating] = useState(null);
+  const [vehicleInfo, setVehicleInfo] = useState(null);
+  const [notificationToast, setNotificationToast] = useState(null);
+  const [isLocationAvailable, setIsLocationAvailable] = useState(true);
+  const [locationErrorCount, setLocationErrorCount] = useState(0);
+  const [mapRef, setMapRef] = useState(null);
+  const [driverBearing, setDriverBearing] = useState(null);
+  const [trafficData, setTrafficData] = useState(null);
+  const [isTrafficEnabled, setIsTrafficEnabled] = useState(true);
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [socketError, setSocketError] = useState(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [showContactDriver, setShowContactDriver] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  const [isChatLoading, setIsChatLoading] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem('userToken');
@@ -198,36 +223,137 @@ const UserDashboard = () => {
     }
   };
 
-  // Initialize socket connection
+  // Add socket connection management
   useEffect(() => {
-    const token = localStorage.getItem('userToken');
-    if (!token) return;
-    socket = io(SOCKET_URL, {
-      auth: { token }
-    });
+    const connectSocket = () => {
+      const token = localStorage.getItem('userToken');
+      if (!token) return;
 
-    // Listen for driver acceptance
-    socket.on('rideAccepted', (data) => {
-      setDriverInfo({
-        id: data.driverId,
-        name: data.driverName,
-        phone: data.driverPhone
+      socket = io(SOCKET_URL, {
+        auth: { token },
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
       });
-      setRideId(data.rideId);
-      setIsTracking(true);
-    });
 
-    // Listen for real-time driver location updates
-    socket.on('driverLocationUpdated', (data) => {
-      if (data.rideId === rideId) {
-        setDriverLocation(data.location);
-      }
-    });
+      socket.on('connect', () => {
+        setSocketConnected(true);
+        setSocketError(null);
+      });
+
+      socket.on('connect_error', (error) => {
+        setSocketConnected(false);
+        setSocketError('Connection failed. Retrying...');
+      });
+
+      socket.on('disconnect', () => {
+        setSocketConnected(false);
+        setSocketError('Connection lost. Reconnecting...');
+      });
+
+      // Listen for driver acceptance
+      socket.on('rideAccepted', (data) => {
+        setDriverInfo({
+          id: data.driverId,
+          name: data.driverName,
+          phone: data.driverPhone,
+          photo: data.driverPhoto,
+          rating: data.driverRating
+        });
+        setVehicleInfo({
+          make: data.vehicleMake,
+          model: data.vehicleModel,
+          licensePlate: data.licensePlate
+        });
+        setRideId(data.rideId);
+        setIsTracking(true);
+        setRideRequestStatus('driver_found');
+        
+        // Show notification toast
+        setNotificationToast({
+          type: 'success',
+          message: `🎉 Your ride has been accepted by ${data.driverName} - ${data.vehicleMake} ${data.vehicleModel}, ${data.licensePlate}`
+        });
+        
+        // Auto-hide toast after 5 seconds
+        setTimeout(() => {
+          setNotificationToast(null);
+        }, 5000);
+      });
+
+      // Listen for real-time driver location updates
+      socket.on('driverLocationUpdated', (data) => {
+        if (data.rideId === rideId) {
+          const newLocation = data.location;
+          const now = Date.now();
+          
+          // Calculate bearing if we have previous location
+          if (previousDriverLocation) {
+            const bearing = calculateBearing(
+              previousDriverLocation.lat,
+              previousDriverLocation.lng,
+              newLocation.lat,
+              newLocation.lng
+            );
+            setDriverBearing(bearing);
+            
+            const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
+              new window.google.maps.LatLng(previousDriverLocation.lat, previousDriverLocation.lng),
+              new window.google.maps.LatLng(newLocation.lat, newLocation.lng)
+            );
+            setIsDriverMoving(distance > 5);
+          }
+          
+          setPreviousDriverLocation(driverLocation);
+          setDriverLocation(newLocation);
+          setLastUpdateTime(now);
+          setIsLocationAvailable(true);
+          setLocationErrorCount(0);
+          
+          // Update traffic data
+          updateTrafficData(newLocation);
+          
+          // Calculate distance and arrival time with traffic
+          if (selectedBooth) {
+            calculateTrafficAwareETA(newLocation, selectedBooth);
+          }
+        }
+      });
+
+      // Add error handling for location updates
+      socket.on('driverLocationError', (data) => {
+        if (data.rideId === rideId) {
+          setLocationErrorCount(prev => prev + 1);
+          if (locationErrorCount >= 3) {
+            setIsLocationAvailable(false);
+            setNotificationToast({
+              type: 'error',
+              message: 'Unable to get driver location. Please try refreshing.'
+            });
+          }
+        }
+      });
+    };
+
+    connectSocket();
 
     return () => {
-      if (socket) socket.disconnect();
+      if (socket) {
+        socket.off('connect');
+        socket.off('connect_error');
+        socket.off('disconnect');
+        socket.off('rideAccepted');
+        socket.off('driverLocationUpdated');
+        socket.off('driverLocationError');
+        socket.disconnect();
+      }
     };
   }, []);
+
+  // Add map load handler
+  const onMapLoad = (map) => {
+    setMapRef(map);
+  };
 
   const handleProceed = async () => {
     if (!selectedBooth || !dropCoordinates || !fare) return;
@@ -371,11 +497,342 @@ const UserDashboard = () => {
           travelMode: window.google.maps.TravelMode.DRIVING
         },
         (result, status) => {
-          if (status === 'OK') setDirections(result);
+          if (status === 'OK') {
+            setDirections(result);
+            if (isDriverMoving) {
+              setRemainingRoute(calculateRemainingRoute(driverLocation, result));
+            }
+          }
         }
       );
     }
-  }, [isTracking, driverLocation, selectedBooth]);
+  }, [isTracking, driverLocation, selectedBooth, isDriverMoving]);
+
+  // Add this function after the existing useEffect hooks
+  const calculateArrivalTime = (distance) => {
+    // Assuming average speed of 30 km/h in city traffic
+    const speedKmh = 30;
+    const timeInHours = distance / speedKmh;
+    const timeInMinutes = Math.ceil(timeInHours * 60);
+    return timeInMinutes;
+  };
+
+  // Add this function after the existing useEffect hooks
+  const calculateRemainingRoute = (currentLocation, fullRoute) => {
+    if (!currentLocation || !fullRoute) return null;
+    
+    const directionsService = new window.google.maps.DirectionsService();
+    const path = fullRoute.routes[0].overview_path;
+    
+    // Find the closest point on the path to current location
+    let closestPoint = null;
+    let minDistance = Infinity;
+    
+    path.forEach(point => {
+      const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
+        new window.google.maps.LatLng(currentLocation.lat, currentLocation.lng),
+        point
+      );
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPoint = point;
+      }
+    });
+    
+    // Create a new path from the closest point to the end
+    const remainingPath = path.slice(path.indexOf(closestPoint));
+    
+    return {
+      ...fullRoute,
+      routes: [{
+        ...fullRoute.routes[0],
+        overview_path: remainingPath
+      }]
+    };
+  };
+
+  // Add notification toast component
+  const NotificationToast = ({ type, message }) => {
+    return (
+      <div className={`notification-toast ${type}`}>
+        <i className={`fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}`}></i>
+        <p>{message}</p>
+      </div>
+    );
+  };
+
+  // Add function to calculate bearing
+  const calculateBearing = (lat1, lon1, lat2, lon2) => {
+    const toRad = (deg) => deg * Math.PI / 180;
+    const toDeg = (rad) => rad * 180 / Math.PI;
+    
+    const φ1 = toRad(lat1);
+    const φ2 = toRad(lat2);
+    const λ1 = toRad(lon1);
+    const λ2 = toRad(lon2);
+    
+    const y = Math.sin(λ2 - λ1) * Math.cos(φ2);
+    const x = Math.cos(φ1) * Math.sin(φ2) -
+              Math.sin(φ1) * Math.cos(φ2) * Math.cos(λ2 - λ1);
+    const θ = Math.atan2(y, x);
+    
+    return (toDeg(θ) + 360) % 360;
+  };
+
+  // Add function to update traffic data
+  const updateTrafficData = async (location) => {
+    if (!isTrafficEnabled) return;
+    
+    try {
+      const trafficService = new window.google.maps.TrafficService();
+      const request = {
+        origin: location,
+        destination: { lat: selectedBooth.latitude, lng: selectedBooth.longitude },
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: window.google.maps.TrafficModel.BEST_GUESS
+        }
+      };
+      
+      trafficService.route(request, (result, status) => {
+        if (status === 'OK') {
+          setTrafficData(result);
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching traffic data:', error);
+    }
+  };
+
+  // Add function to calculate traffic-aware ETA
+  const calculateTrafficAwareETA = async (driverLocation, pickupLocation) => {
+    try {
+      const directionsService = new window.google.maps.DirectionsService();
+      const request = {
+        origin: driverLocation,
+        destination: pickupLocation,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: window.google.maps.TrafficModel.BEST_GUESS
+        }
+      };
+      
+      directionsService.route(request, (result, status) => {
+        if (status === 'OK') {
+          const route = result.routes[0];
+          const leg = route.legs[0];
+          
+          setDistanceToPickup((leg.distance.value / 1000).toFixed(1));
+          setEstimatedArrivalTime(Math.ceil(leg.duration_in_traffic.value / 60));
+          
+          // Update route with traffic
+          setRemainingRoute(result);
+        }
+      });
+    } catch (error) {
+      console.error('Error calculating traffic-aware ETA:', error);
+    }
+  };
+
+  // Add debounced traffic update
+  const debouncedTrafficUpdate = useCallback(
+    debounce((location) => {
+      updateTrafficData(location);
+    }, 30000), // Update every 30 seconds
+    []
+  );
+
+  // Add ride cancellation handler
+  const handleCancelRide = async () => {
+    if (!rideId) return;
+    
+    try {
+      setIsCancelling(true);
+      const token = localStorage.getItem('userToken');
+      const response = await axios.post(
+        'http://localhost:5000/api/rides/cancel',
+        { rideId },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      if (response.data.success) {
+        setNotificationToast({
+          type: 'success',
+          message: 'Ride cancelled successfully'
+        });
+        setIsTracking(false);
+        setRideRequestStatus(null);
+        setRideId(null);
+      }
+    } catch (error) {
+      setNotificationToast({
+        type: 'error',
+        message: 'Failed to cancel ride. Please try again.'
+      });
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  // Add contact driver handler
+  const handleContactDriver = () => {
+    if (!driverInfo?.phone) return;
+    window.location.href = `tel:${driverInfo.phone}`;
+  };
+
+  // Add chat socket event handlers
+  useEffect(() => {
+    if (!socket || !rideId) return;
+
+    socket.on('newMessage', (message) => {
+      setMessages(prev => [...prev, message]);
+      if (!showChat) {
+        setUnreadMessages(prev => prev + 1);
+        setNotificationToast({
+          type: 'info',
+          message: `New message from ${message.senderName}`
+        });
+      }
+    });
+
+    // Load chat history when chat is opened
+    if (showChat) {
+      loadChatHistory();
+    }
+
+    return () => {
+      socket.off('newMessage');
+    };
+  }, [socket, rideId, showChat]);
+
+  // Add function to load chat history
+  const loadChatHistory = async () => {
+    try {
+      setIsChatLoading(true);
+      const token = localStorage.getItem('userToken');
+      const response = await axios.get(
+        `http://localhost:5000/api/chat/history/${rideId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      if (response.data.success) {
+        setMessages(response.data.messages);
+        setUnreadMessages(0);
+      }
+    } catch (error) {
+      console.error('Error loading chat history:', error);
+      setNotificationToast({
+        type: 'error',
+        message: 'Failed to load chat history'
+      });
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  // Add function to send message
+  const sendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !rideId) return;
+
+    const message = {
+      rideId,
+      senderId: user._id,
+      senderName: user.name,
+      content: newMessage.trim(),
+      timestamp: new Date()
+    };
+
+    try {
+      socket.emit('sendMessage', message);
+      setMessages(prev => [...prev, message]);
+      setNewMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      setNotificationToast({
+        type: 'error',
+        message: 'Failed to send message'
+      });
+    }
+  };
+
+  // Add chat component
+  const ChatInterface = () => {
+    const chatEndRef = useRef(null);
+
+    const scrollToBottom = () => {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    useEffect(() => {
+      scrollToBottom();
+    }, [messages]);
+
+    return (
+      <div className="chat-interface">
+        <div className="chat-header">
+          <h3>Chat with {driverInfo?.name}</h3>
+          <button 
+            className="close-chat-btn"
+            onClick={() => setShowChat(false)}
+          >
+            <i className="fas fa-times"></i>
+          </button>
+        </div>
+        <div className="chat-messages">
+          {isChatLoading ? (
+            <div className="chat-loading">
+              <div className="loading-spinner"></div>
+            </div>
+          ) : messages.length === 0 ? (
+            <div className="no-messages">
+              <p>No messages yet. Start the conversation!</p>
+            </div>
+          ) : (
+            messages.map((message, index) => (
+              <div
+                key={index}
+                className={`message ${message.senderId === user._id ? 'sent' : 'received'}`}
+              >
+                <div className="message-content">
+                  <p>{message.content}</p>
+                  <span className="message-time">
+                    {moment(message.timestamp).format('hh:mm A')}
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
+          <div ref={chatEndRef} />
+        </div>
+        <form className="chat-input" onSubmit={sendMessage}>
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Type a message..."
+            disabled={!socketConnected}
+          />
+          <button 
+            type="submit"
+            disabled={!newMessage.trim() || !socketConnected}
+          >
+            <i className="fas fa-paper-plane"></i>
+          </button>
+        </form>
+      </div>
+    );
+  };
 
   if (!user) return (
     <div className="loading-container">
@@ -497,30 +954,45 @@ const UserDashboard = () => {
                     ) : (
                       <div className="request-status">
                         {rideRequestStatus === 'sending' && (
-                          <p>Sending ride request to drivers...</p>
+                          <div className="searching-loader">
+                            <div className="car-animation">
+                              <i className="fas fa-car"></i>
+                            </div>
+                            <p>Sending ride request to drivers...</p>
+                          </div>
                         )}
                         {rideRequestStatus === 'sent' && (
-                          <p className="success-message">Ride request sent to drivers!</p>
+                          <div className="searching-loader">
+                            <div className="car-animation">
+                              <i className="fas fa-car"></i>
+                            </div>
+                            <p>Looking for nearby drivers...</p>
+                            <div className="pulse-animation"></div>
+                          </div>
                         )}
                         {rideRequestStatus === 'error' && (
-                          <p className="error-message">Failed to send ride request. Please try again.</p>
-                        )}
-                        {rideRequestStatus === 'searching_driver' && (
-                          <>
-                            <div className="loader"></div>
-                            <p>Looking for nearby drivers...</p>
-                          </>
-                        )}
-                        {rideRequestStatus === 'driver_found' && (
-                          <p className="success-message">Driver found! Redirecting...</p>
-                        )}
-                        {rideRequestStatus === 'no_driver' && (
-                          <>
-                            <p className="error-message">No drivers available right now.</p>
+                          <div className="error-message">
+                            <i className="fas fa-exclamation-circle"></i>
+                            <p>Failed to send ride request. Please try again.</p>
                             <button className="retry-btn" onClick={handleProceed}>
                               Try Again
                             </button>
-                          </>
+                          </div>
+                        )}
+                        {rideRequestStatus === 'driver_found' && (
+                          <div className="driver-found-message">
+                            <i className="fas fa-check-circle"></i>
+                            <p>Driver found! Your ride is on the way.</p>
+                          </div>
+                        )}
+                        {rideRequestStatus === 'no_driver' && (
+                          <div className="error-message">
+                            <i className="fas fa-times-circle"></i>
+                            <p>No drivers available right now.</p>
+                            <button className="retry-btn" onClick={handleProceed}>
+                              Try Again
+                            </button>
+                          </div>
                         )}
                       </div>
                     )}
@@ -628,19 +1100,165 @@ const UserDashboard = () => {
     } else if (isTracking && driverLocation) {
       return (
         <div className="live-tracking-content">
-          <h2>Driver is on the way!</h2>
-          <p><strong>Driver:</strong> {driverInfo?.name} ({driverInfo?.phone})</p>
-          <LoadScript googleMapsApiKey={GOOGLE_MAPS_API_KEY} libraries={libraries}>
+          {notificationToast && <NotificationToast {...notificationToast} />}
+          {socketError && (
+            <div className="connection-error">
+              <i className="fas fa-exclamation-circle"></i>
+              <p>{socketError}</p>
+            </div>
+          )}
+          <div className="tracking-header">
+            <h2>Your ride is on the way!</h2>
+            <div className="driver-info-card">
+              <div className="driver-avatar">
+                {driverInfo?.photo ? (
+                  <img src={driverInfo.photo} alt={driverInfo.name} />
+                ) : (
+                  <i className="fas fa-user"></i>
+                )}
+              </div>
+              <div className="driver-details">
+                <h3>{driverInfo?.name}</h3>
+                <div className="driver-rating">
+                  {[...Array(5)].map((_, i) => (
+                    <i 
+                      key={i} 
+                      className={`fas fa-star ${i < (driverInfo?.rating || 0) ? 'filled' : ''}`}
+                    ></i>
+                  ))}
+                </div>
+                <div className="vehicle-info">
+                  <p>{vehicleInfo?.make} {vehicleInfo?.model}</p>
+                  <p className="license-plate">{vehicleInfo?.licensePlate}</p>
+                </div>
+                <p className="driver-phone">{driverInfo?.phone}</p>
+                <div className="driver-status">
+                  <div className={`status-indicator ${isDriverMoving ? 'moving' : 'stopped'}`}></div>
+                  <span>{isDriverMoving ? 'Driver is moving' : 'Driver is stopped'}</span>
+                </div>
+              </div>
+              <div className="driver-actions">
+                <button 
+                  className="chat-btn"
+                  onClick={() => setShowChat(true)}
+                >
+                  <i className="fas fa-comments"></i>
+                  Chat
+                  {unreadMessages > 0 && (
+                    <span className="unread-badge">{unreadMessages}</span>
+                  )}
+                </button>
+                <button 
+                  className="contact-driver-btn"
+                  onClick={() => setShowContactDriver(true)}
+                >
+                  <i className="fas fa-phone"></i>
+                  Contact Driver
+                </button>
+                <button 
+                  className="cancel-ride-btn"
+                  onClick={handleCancelRide}
+                  disabled={isCancelling}
+                >
+                  <i className="fas fa-times"></i>
+                  Cancel Ride
+                </button>
+              </div>
+            </div>
+            {distanceToPickup && (
+              <div className="arrival-info">
+                <i className="fas fa-map-marker-alt"></i>
+                <p>Driver is {distanceToPickup} km away</p>
+                {estimatedArrivalTime && (
+                  <p>Arriving in approximately {estimatedArrivalTime} minutes</p>
+                )}
+                {lastUpdateTime && (
+                  <p className="last-update">
+                    Last updated: {moment(lastUpdateTime).fromNow()}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+          <LoadScript 
+            googleMapsApiKey={GOOGLE_MAPS_API_KEY} 
+            libraries={[...libraries, 'geometry']}
+            onError={(error) => {
+              setNotificationToast({
+                type: 'error',
+                message: 'Failed to load map. Please refresh the page.'
+              });
+            }}
+          >
             <GoogleMap
               mapContainerStyle={{ width: '100%', height: '400px' }}
               center={driverLocation}
               zoom={13}
+              onLoad={onMapLoad}
+              options={{
+                trafficLayer: isTrafficEnabled
+              }}
             >
-              <Marker position={driverLocation} label="Driver" />
-              <Marker position={{ lat: selectedBooth.latitude, lng: selectedBooth.longitude }} label="Pickup" />
-              {directions && <DirectionsRenderer directions={directions} />}
+              {isLocationAvailable ? (
+                <>
+                  <Marker 
+                    position={driverLocation} 
+                    icon={{
+                      url: 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+                      scaledSize: new window.google.maps.Size(40, 40),
+                      rotation: driverBearing || 0
+                    }}
+                  />
+                  <Marker 
+                    position={{ lat: selectedBooth.latitude, lng: selectedBooth.longitude }}
+                    icon={{
+                      url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png',
+                      scaledSize: new window.google.maps.Size(40, 40)
+                    }}
+                  />
+                  {remainingRoute && (
+                    <DirectionsRenderer 
+                      directions={remainingRoute}
+                      options={{
+                        suppressMarkers: true,
+                        polylineOptions: {
+                          strokeColor: '#2196F3',
+                          strokeWeight: 5,
+                          strokeOpacity: 0.8
+                        }
+                      }}
+                    />
+                  )}
+                </>
+              ) : (
+                <div className="map-error-overlay">
+                  <i className="fas fa-exclamation-triangle"></i>
+                  <p>Driver location unavailable</p>
+                  <button onClick={() => window.location.reload()}>
+                    Refresh
+                  </button>
+                </div>
+              )}
             </GoogleMap>
           </LoadScript>
+          {showContactDriver && (
+            <div className="contact-driver-modal">
+              <div className="modal-content">
+                <h3>Contact Driver</h3>
+                <p>Would you like to call the driver?</p>
+                <div className="modal-actions">
+                  <button onClick={handleContactDriver}>
+                    <i className="fas fa-phone"></i>
+                    Call Now
+                  </button>
+                  <button onClick={() => setShowContactDriver(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          {showChat && <ChatInterface />}
         </div>
       );
     }
