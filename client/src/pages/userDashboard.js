@@ -901,21 +901,28 @@ const UserDashboard = () => {
             ) : (
               <div className="booking-flow">
                 <h3>Select Pickup Location</h3>
-                <div className="booth-options">
+                <div className="booth-options improved-booth-options">
                   {BOOTH_LOCATIONS.map(booth => (
                     <div
                       key={booth.id}
-                      className={`booth-option ${selectedBooth?.id === booth.id ? 'selected' : ''}`}
+                      className={`booth-option improved-booth-option ${selectedBooth?.id === booth.id ? 'selected' : ''}`}
                       onClick={() => handleBoothSelect(booth)}
                     >
-                      <h4>{booth.name}</h4>
-                      <p>Latitude: {booth.latitude}</p>
-                      <p>Longitude: {booth.longitude}</p>
+                      <div className="booth-header">
+                        <span className="booth-name">{booth.name}</span>
+                        {selectedBooth?.id === booth.id && <span className="booth-selected-badge">Selected</span>}
+                      </div>
+                      <div className="booth-coords">
+                        <span>Lat: {booth.latitude.toFixed(5)}</span>
+                        <span>Lng: {booth.longitude.toFixed(5)}</span>
+                      </div>
                     </div>
                   ))}
                 </div>
-
                 {selectedBooth && (
+                  <button className="confirm-pickup-btn" onClick={() => setIsBookingFlow('confirmed')}>Confirm Pickup Location</button>
+                )}
+                {selectedBooth && isBookingFlow === 'confirmed' && (
                   <div className="drop-location">
                     <h3>Enter Drop Location</h3>
                     {isLoaded && (
@@ -939,7 +946,6 @@ const UserDashboard = () => {
                     )}
                   </div>
                 )}
-
                 {showFare && fare && (
                   <div className="fare-display">
                     <h3>Ride Summary</h3>
