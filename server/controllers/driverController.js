@@ -23,11 +23,11 @@ exports.registerDriver = async (req, res) => {
 
     // Check for missing files and log them
     const requiredFields = [
-      'aadhaarPhoto', 
-      'registrationCertificatePhoto', 
+      'aadhaarPhoto',
+      'registrationCertificatePhoto',
       'drivingLicensePhoto',
-      'permitPhoto', 
-      'fitnessCertificatePhoto', 
+      'permitPhoto',
+      'fitnessCertificatePhoto',
       'insurancePolicyPhoto'
     ];
     
@@ -210,7 +210,7 @@ exports.registerDriver = async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { id: savedDriver._id },
+      { id: savedDriver._id, role: 'driver' },
       process.env.JWT_SECRET || 'your_jwt_secret',
       { expiresIn: '30d' }
     );
@@ -278,10 +278,10 @@ exports.loginDriver = async (req, res) => {
         error: 'Please provide mobile number and password'
       });
     }
-
+    
     // Find driver by mobile number
     const driver = await Driver.findOne({ mobileNo }).select('+password');
-
+    
     // Check if driver exists
     if (!driver) {
       console.error(`[Driver Login] Driver with mobile ${mobileNo} not found`);
@@ -307,7 +307,7 @@ exports.loginDriver = async (req, res) => {
 
     // Create token
     const token = jwt.sign(
-      { id: driver._id },
+      { id: driver._id, role: 'driver' },
       process.env.JWT_SECRET || 'your_jwt_secret',
       { expiresIn: '30d' }
     );
@@ -340,7 +340,7 @@ exports.loginDriver = async (req, res) => {
 exports.getDriverProfile = async (req, res) => {
   try {
     const driver = await Driver.findById(req.driver.id).select('-password');
-
+    
     if (!driver) {
       return res.status(404).json({
         success: false,

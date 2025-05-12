@@ -6,6 +6,8 @@ const dotenv = require('dotenv');
 const path = require('path');
 const fs = require('fs');
 const { printDriverStats } = require('./controllers/driverController');
+const http = require('http');
+const { initializeSocket } = require('./socket');
 
 // Load env vars
 dotenv.config();
@@ -102,9 +104,11 @@ app.use((err, req, res, next) => {
 
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`
-=========================================================
+const server = http.createServer(app);
+// Initialize Socket.IO
+initializeSocket(server);
+server.listen(PORT, () => {
+  console.log(`\n=========================================================
  GANTAVYAM SERVER STARTED
  Server running on port ${PORT}
  Uploads directory: ${uploadsDir}

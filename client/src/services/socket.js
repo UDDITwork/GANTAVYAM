@@ -5,9 +5,10 @@ class SocketService {
   constructor() {
     this.socket = null;
     this.connected = false;
-    this.serverUrl = 'http://localhost:5000';
+    this.serverUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
     this.reconnectionAttempts = 5;
     this.reconnectionDelay = 1000;
+    this.initializePromise = null; // Track initialization
   }
 
   // Initialize socket connection with authentication token
@@ -23,21 +24,43 @@ class SocketService {
       return this.socket;
     }
 
+    // Check if initialization is in progress
+    if (this.initializePromise) {
+      console.log('Socket initialization already in progress');
+      return this.initializePromise;
+    }
+
     // Clean up any existing socket before creating a new one
     this.disconnect();
 
     // Create new socket connection
     console.log('Initializing new socket connection with token');
-    this.socket = io(this.serverUrl, {
-      auth: { token },
-      reconnection: true,
-      reconnectionAttempts: this.reconnectionAttempts,
-      reconnectionDelay: this.reconnectionDelay,
-      transports: ['websocket', 'polling']
-    });
+    
+    this.initializePromise = new Promise((resolve) => {
+      this.socket = io(this.serverUrl, {
+        auth: { token },
+        reconnection: true,
+        reconnectionAttempts: this.reconnectionAttempts,
+        reconnectionDelay: this.reconnectionDelay,
+        transports: ['websocket', 'polling']
+      });
 
-    // Set up event listeners
-    this._setupEventListeners();
+      // Set up event listeners
+      this._setupEventListeners();
+      
+      // Wait for connection
+      this.socket.once('connect', () => {
+        this.initializePromise = null;
+        resolve(this.socket);
+      });
+      
+      // Handle connection error
+      this.socket.once('connect_error', (error) => {
+        this.initializePromise = null;
+        console.error('Failed to connect:', error);
+        resolve(null);
+      });
+    });
 
     return this.socket;
   }
@@ -77,6 +100,7 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.connected = false;
+      this.initializePromise = null;
     }
   }
 
@@ -141,38 +165,6 @@ class SocketService {
     this.socket.off('newMessage');
   }
 
-  // Join a specific ride room for real-time updates
-  joinRideRoom(rideId) {
-    if (!this.socket || !rideId) return;
-    
-    this.socket.emit('joinRideRoom', { rideId }, (response) => {
-      if (response.success) {
-        console.log(`Joined ride room for ride ${rideId}`);
-      } else {
-        console.error(`Failed to join ride room: ${response.error}`);
-      }
-    });
-  }
-
-  // Leave a specific ride room
-  leaveRideRoom(rideId) {
-    if (!this.socket || !rideId) return;
-    
-    this.socket.emit('leaveRideRoom', { rideId });
-    console.log(`Left ride room for ride ${rideId}`);
-  }
-
-  // Send a chat message in a ride room
-  sendMessage(message) {
-    if (!this.socket) {
-      console.error('Cannot send message: Socket not initialized');
-      return false;
-    }
-    
-    this.socket.emit('sendMessage', message);
-    return true;
-  }
-
   // Send a ride request to available drivers
   sendRideRequest(rideRequest, callback) {
     if (!this.socket) {
@@ -187,16 +179,6 @@ class SocketService {
     } else {
       this.socket.emit('userRideRequest', rideRequest);
     }
-  }
-
-  // Cancel an ongoing ride
-  cancelRide(rideId, callback) {
-    if (!this.socket || !rideId) {
-      if (callback) callback({ success: false, error: 'Socket not connected or invalid ride ID' });
-      return;
-    }
-    
-    this.socket.emit('cancelRide', { rideId }, callback);
   }
 
   // Generic method to emit events with error handling
@@ -219,18 +201,14 @@ class SocketService {
 // Create singleton instance
 const socketService = new SocketService();
 
-// Export instance and functions
+// Export instance methods
 export const initializeSocket = (token) => socketService.initialize(token);
 export const disconnectSocket = () => socketService.disconnect();
 export const getSocket = () => socketService.getSocket();
 export const isSocketConnected = () => socketService.isConnected();
 export const subscribeToDriverUpdates = (rideId, callbacks) => socketService.subscribeToDriverUpdates(rideId, callbacks);
 export const unsubscribeFromDriverUpdates = () => socketService.unsubscribeFromDriverUpdates();
-export const joinRideRoom = (rideId) => socketService.joinRideRoom(rideId);
-export const leaveRideRoom = (rideId) => socketService.leaveRideRoom(rideId);
-export const sendMessage = (message) => socketService.sendMessage(message);
 export const sendRideRequest = (rideRequest, callback) => socketService.sendRideRequest(rideRequest, callback);
-export const cancelRide = (rideId, callback) => socketService.cancelRide(rideId, callback);
 export const emitEvent = (eventName, data, callback) => socketService.emitEvent(eventName, data, callback);
 
 export default socketService;

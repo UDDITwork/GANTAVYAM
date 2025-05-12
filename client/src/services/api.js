@@ -24,7 +24,7 @@ const fileClient = axios.create({
 
 // Add authentication token to requests
 const addAuthToken = (config) => {
-  const token = localStorage.getItem('userToken');
+  const token = localStorage.getItem('userToken') || localStorage.getItem('driverToken');
   if (token) {
     config.headers['Authorization'] = `Bearer ${token}`;
   }
@@ -75,7 +75,7 @@ export const auth = {
       if (response.data.token) {
         localStorage.setItem('userToken', response.data.token);
         localStorage.setItem('userRole', 'user');
-        localStorage.setItem('userData', JSON.stringify(response.data.user));
+        localStorage.setItem('user', JSON.stringify(response.data.user));
       }
       return response.data;
     } catch (error) {
@@ -98,9 +98,9 @@ export const auth = {
       const response = await apiClient.post('/drivers/login', credentials);
       // Store token in localStorage
       if (response.data.token) {
-        localStorage.setItem('userToken', response.data.token);
-        localStorage.setItem('userRole', 'driver');
-        localStorage.setItem('userData', JSON.stringify(response.data.driver));
+        localStorage.setItem('driverToken', response.data.token);
+        localStorage.setItem('driverRole', 'driver');
+        localStorage.setItem('driver', JSON.stringify(response.data.driver));
       }
       return response.data;
     } catch (error) {
@@ -119,9 +119,9 @@ export const drivers = {
       
       // Store token if provided in response
       if (response.data.token) {
-        localStorage.setItem('userToken', response.data.token);
-        localStorage.setItem('userRole', 'driver');
-        localStorage.setItem('userData', JSON.stringify(response.data.driver));
+        localStorage.setItem('driverToken', response.data.token);
+        localStorage.setItem('driverRole', 'driver');
+        localStorage.setItem('driver', JSON.stringify(response.data.driver));
       }
       
       return response.data;
@@ -192,9 +192,11 @@ export const getAllDrivers = admin.getAllDrivers;
 export const getDriverById = admin.getDriverById;
 export const registerDriver = admin.registerDriver;
 
-// Export default API object
-export default {
+// Fixed default export
+const api = {
   auth,
   drivers,
   admin
 };
+
+export default api;

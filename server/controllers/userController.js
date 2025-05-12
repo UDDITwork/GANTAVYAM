@@ -45,35 +45,49 @@ exports.userLogin = async (req, res) => {
   try {
     const { phone, password } = req.body;
     
-    console.log(`Login attempt for phone: ${phone}`);
+    console.log(`[LOGIN ATTEMPT] Phone: ${phone}`);
     
-    // Find the user by phone
-    const user = await User.findOne({ phone });
+    // Find the user by phone - explicitly select password field
+    const user = await User.findOne({ phone }).select('+password');
 
     if (!user) {
-      console.log(`User with phone ${phone} not found`);
+      console.log(`[LOGIN FAILED] User with phone ${phone} not found`);
       return res.status(401).json({ 
         success: false, 
         message: 'Invalid phone number or password. Please try again.' 
       });
     }
 
-    // Compare password using bcrypt
-    // const isMatch = await bcrypt.compare(password, user.password);
-    // TEMPORARY: Compare plain text passwords for development/testing only
-    const isMatch = password === user.password;
+    console.log(`[USER FOUND] ID: ${user._id}, Name: ${user.name}`);
+
+    // Check password
+    let isMatch = false;
+    
+    // First try bcrypt comparison
+    try {
+      isMatch = await bcrypt.compare(password, user.password);
+      console.log(`[BCRYPT COMPARISON] Result: ${isMatch}`);
+    } catch (bcryptError) {
+      // If bcrypt fails, try plain text comparison (for development only)
+      console.log(`[BCRYPT FAILED] Trying plain text comparison`);
+      isMatch = (password === user.password);
+      console.log(`[PLAIN TEXT COMPARISON] Result: ${isMatch}`);
+    }
     
     if (!isMatch) {
-      console.log(`Password mismatch for user with phone ${phone}`);
+      console.log(`[LOGIN FAILED] Password mismatch for phone ${phone}`);
       return res.status(401).json({ 
         success: false, 
         message: 'Invalid phone number or password. Please try again.' 
       });
     }
 
-    // Create token with 24 hour expiration
+    // Create token with 24 hour expiration - INCLUDE ROLE!
     const token = jwt.sign(
-      { id: user._id, role: 'user' },
+      { 
+        id: user._id, 
+        role: 'user' // ✅ Added role field
+      },
       config.jwtSecret,
       { expiresIn: '24h' }
     );
@@ -82,7 +96,7 @@ exports.userLogin = async (req, res) => {
     user.lastLogin = Date.now();
     await user.save();
     
-    console.log(`User ${user._id} logged in successfully`);
+    console.log(`[LOGIN SUCCESS] User ${user._id} (${user.name}) logged in successfully`);
 
     // Prepare user data to return (excluding password)
     const userData = {
@@ -100,7 +114,7 @@ exports.userLogin = async (req, res) => {
       user: userData
     });
   } catch (err) {
-    console.error('Login error:', err);
+    console.error('[LOGIN ERROR]', err);
     res.status(500).json({ 
       success: false, 
       message: 'Login failed due to server error' 

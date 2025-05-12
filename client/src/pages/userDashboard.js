@@ -6,8 +6,8 @@ import axios from 'axios';
 import moment from 'moment';
 import { debounce } from 'lodash';
 import './UserDashboard.css';
-import { initializeSocket, getSocket, emitEvent, 
-         subscribeToDriverUpdates, unsubscribeFromDriverUpdates } from '../services/socket';
+import { initializeSocket, getSocket, sendRideRequest, 
+         subscribeToDriverUpdates, unsubscribeFromDriverUpdates, disconnectSocket } from '../services/socket';
 
 // API key for Google Maps
 const GOOGLE_MAPS_API_KEY = "AIzaSyDFbjmVJoi2wDzwJNR2rrowpSEtSes1jw4";
@@ -23,6 +23,9 @@ const BOOTH_LOCATIONS = [
 ];
 
 const UserDashboard = () => {
+  // Navigation hook
+  const navigate = useNavigate();
+  
   // User and authentication state
   const [user, setUser] = useState(null);
   const [imageUrl, setImageUrl] = useState(null);
@@ -94,11 +97,8 @@ const UserDashboard = () => {
   
   // Notification state
   const [notificationToast, setNotificationToast] = useState(null);
-  
-  // Navigation
-  const navigate = useNavigate();
 
-  // Check if user is logged in
+  // Check if user is logged in and initialize socket
   useEffect(() => {
     const token = localStorage.getItem('userToken');
     const userData = localStorage.getItem('user');
@@ -113,15 +113,101 @@ const UserDashboard = () => {
       setUser(parsedUser);
       
       // Initialize socket connection with user token
+      console.log('[UserDashboard] Initializing socket...');
       const socket = initializeSocket(token);
+      
       if (socket) {
-        setSocketConnected(true);
+        console.log('[UserDashboard] Socket initialized successfully');
+        
+        // Add connection status listeners
+        socket.on('connect', () => {
+          console.log('✅ [UserDashboard] Socket connected');
+          setSocketConnected(true);
+          setSocketError(null);
+        });
+        
+        socket.on('disconnect', () => {
+          console.log('⚠️ [UserDashboard] Socket disconnected');
+          setSocketConnected(false);
+          setSocketError('Connection lost. Reconnecting...');
+        });
+        
+        socket.on('connect_error', (error) => {
+          console.error('❌ [UserDashboard] Socket connection error:', error);
+          setSocketConnected(false);
+          setSocketError('Connection failed. Retrying...');
+        });
+        
+        socket.on('connectionSuccess', (data) => {
+          console.log('✅ [UserDashboard] Server confirmed connection:', data);
+        });
       }
     } catch (error) {
-      console.error('Error parsing user data:', error);
+      console.error('[UserDashboard] Error parsing user data:', error);
       navigate('/user/login');
     }
+
+    // Cleanup on unmount
+    return () => {
+      console.log('[UserDashboard] Cleaning up...');
+      unsubscribeFromDriverUpdates();
+      disconnectSocket();
+    };
   }, [navigate]);
+
+  // Setup socket listeners for ride events
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    // Listen for ride acceptance
+    socket.on('rideAccepted', (data) => {
+      console.log('[UserDashboard] Ride accepted:', data);
+      setDriverInfo({
+        id: data.driverId,
+        name: data.driverName,
+        phone: data.driverPhone,
+        photo: data.driverPhoto,
+        rating: data.driverRating
+      });
+      setVehicleInfo({
+        make: data.vehicleMake,
+        model: data.vehicleModel,
+        licensePlate: data.licensePlate
+      });
+      setRideId(data.rideId);
+      setIsTracking(true);
+      setRideRequestStatus('driver_found');
+      
+      // Show notification
+      setNotificationToast({
+        type: 'success',
+        message: `Your ride has been accepted by ${data.driverName}`
+      });
+      
+      setTimeout(() => setNotificationToast(null), 5000);
+    });
+
+    // Listen for ride request confirmation
+    socket.on('rideRequestConfirmed', (data) => {
+      console.log('[UserDashboard] Ride request confirmed:', data);
+      if (data.success) {
+        setRideRequestStatus('sent');
+        setRideId(data.rideId);
+      } else {
+        setRideRequestStatus('error');
+        setNotificationToast({
+          type: 'error',
+          message: data.error || 'Failed to send ride request'
+        });
+      }
+    });
+
+    return () => {
+      socket.off('rideAccepted');
+      socket.off('rideRequestConfirmed');
+    };
+  }, []);
 
   // Get user's current location
   useEffect(() => {
@@ -148,7 +234,7 @@ const UserDashboard = () => {
     );
   }, []);
 
-  // Handle window resize for responsive design
+  // Handle window resize
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth > 768) {
@@ -162,229 +248,24 @@ const UserDashboard = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Setup socket listeners for ride updates
+  // Setup real-time driver updates
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
 
-    // Listen for driver acceptance
-    socket.on('rideAccepted', (data) => {
-      setDriverInfo({
-        id: data.driverId,
-        name: data.driverName,
-        phone: data.driverPhone,
-        photo: data.driverPhoto,
-        rating: data.driverRating
-      });
-      setVehicleInfo({
-        make: data.vehicleMake,
-        model: data.vehicleModel,
-        licensePlate: data.licensePlate
-      });
-      setRideId(data.rideId);
-      setIsTracking(true);
-      setRideRequestStatus('driver_found');
-      
-      // Show notification toast
-      setNotificationToast({
-        type: 'success',
-        message: `🎉 Your ride has been accepted by ${data.driverName} - ${data.vehicleMake} ${data.vehicleModel}, ${data.licensePlate}`
-      });
-      
-      // Auto-hide toast after 5 seconds
-      setTimeout(() => {
-        setNotificationToast(null);
-      }, 5000);
-    });
-
-    // Listen for real-time driver location updates
     socket.on('driverLocationUpdated', (data) => {
       if (data.rideId === rideId) {
-        const newLocation = data.location;
-        const now = Date.now();
-        
-        // Calculate bearing if we have previous location
-        if (previousDriverLocation) {
-          const bearing = calculateBearing(
-            previousDriverLocation.lat,
-            previousDriverLocation.lng,
-            newLocation.lat,
-            newLocation.lng
-          );
-          setDriverBearing(bearing);
-          
-          const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
-            new window.google.maps.LatLng(previousDriverLocation.lat, previousDriverLocation.lng),
-            new window.google.maps.LatLng(newLocation.lat, newLocation.lng)
-          );
-          setIsDriverMoving(distance > 5);
-        }
-        
-        setPreviousDriverLocation(driverLocation);
-        setDriverLocation(newLocation);
-        setLastUpdateTime(now);
-        setIsLocationAvailable(true);
-        setLocationErrorCount(0);
-        
-        // Update traffic data
-        updateTrafficData(newLocation);
-        
-        // Calculate distance and arrival time with traffic
-        if (selectedBooth) {
-          calculateTrafficAwareETA(newLocation, selectedBooth);
-        }
+        setDriverLocation(data.location);
+        setLastUpdateTime(Date.now());
       }
-    });
-
-    // Add error handling for location updates
-    socket.on('driverLocationError', (data) => {
-      if (data.rideId === rideId) {
-        setLocationErrorCount(prev => prev + 1);
-        if (locationErrorCount >= 3) {
-          setIsLocationAvailable(false);
-          setNotificationToast({
-            type: 'error',
-            message: 'Unable to get driver location. Please try refreshing.'
-          });
-        }
-      }
-    });
-
-    socket.on('connect', () => {
-      setSocketConnected(true);
-      setSocketError(null);
-    });
-
-    socket.on('connect_error', (err) => {
-      console.error('Socket connection error:', err);
-      setSocketConnected(false);
-      setSocketError('Connection failed. Retrying...');
-    });
-
-    socket.on('disconnect', () => {
-      setSocketConnected(false);
-      setSocketError('Connection lost. Reconnecting...');
     });
 
     return () => {
-      socket.off('rideAccepted');
       socket.off('driverLocationUpdated');
-      socket.off('driverLocationError');
-      socket.off('connect');
-      socket.off('connect_error');
-      socket.off('disconnect');
     };
-  }, [rideId, previousDriverLocation, driverLocation, locationErrorCount, selectedBooth]);
+  }, [rideId]);
 
-  // Setup chat socket listeners
-  useEffect(() => {
-    const socket = getSocket();
-    if (!socket || !rideId) return;
-
-    socket.on('newMessage', (message) => {
-      setMessages(prev => [...prev, message]);
-      if (!showChat) {
-        setUnreadMessages(prev => prev + 1);
-        setNotificationToast({
-          type: 'info',
-          message: `New message from ${message.senderName}`
-        });
-      }
-    });
-
-    // Load chat history when chat is opened
-    if (showChat) {
-      loadChatHistory();
-    }
-
-    return () => {
-      socket.off('newMessage');
-    };
-  }, [rideId, showChat]);
-
-  // Update directions when driver location changes
-  useEffect(() => {
-    if (isTracking && driverLocation && selectedBooth && window.google) {
-      const directionsService = new window.google.maps.DirectionsService();
-      directionsService.route(
-        {
-          origin: driverLocation,
-          destination: {
-            lat: selectedBooth.latitude,
-            lng: selectedBooth.longitude
-          },
-          travelMode: window.google.maps.TravelMode.DRIVING
-        },
-        (result, status) => {
-          if (status === 'OK') {
-            setDirections(result);
-            if (isDriverMoving) {
-              setRemainingRoute(calculateRemainingRoute(driverLocation, result));
-            }
-          }
-        }
-      );
-    }
-  }, [isTracking, driverLocation, selectedBooth, isDriverMoving]);
-
-  // Fetch ride history when tab changes to 'rides'
-  useEffect(() => {
-    if (activeTab === 'rides') {
-      fetchRideHistory();
-    }
-  }, [activeTab]);
-
-  // Function to fetch ride history
-  const fetchRideHistory = async () => {
-    try {
-      setIsLoadingRides(true);
-      const token = localStorage.getItem('userToken');
-      const response = await axios.get('http://localhost:5000/api/ride-history/user-rides', {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-
-      if (response.data.success) {
-        setRideHistory(response.data.rides);
-      }
-    } catch (error) {
-      console.error('Error fetching ride history:', error);
-    } finally {
-      setIsLoadingRides(false);
-    }
-  };
-
-  // Load chat history
-  const loadChatHistory = async () => {
-    try {
-      setIsChatLoading(true);
-      const token = localStorage.getItem('userToken');
-      const response = await axios.get(
-        `http://localhost:5000/api/chat/history/${rideId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        }
-      );
-
-      if (response.data.success) {
-        setMessages(response.data.messages);
-        setUnreadMessages(0);
-      }
-    } catch (error) {
-      console.error('Error loading chat history:', error);
-      setNotificationToast({
-        type: 'error',
-        message: 'Failed to load chat history'
-      });
-    } finally {
-      setIsChatLoading(false);
-    }
-  };
-
-  // Google Maps related handlers
+  // Google Maps handlers
   const onLoadScript = () => {
     setIsLoaded(true);
   };
@@ -410,125 +291,7 @@ const UserDashboard = () => {
     }
   };
 
-  // Calculate bearing between two coordinates
-  const calculateBearing = (lat1, lon1, lat2, lon2) => {
-    const toRad = (deg) => deg * Math.PI / 180;
-    const toDeg = (rad) => rad * 180 / Math.PI;
-    
-    const φ1 = toRad(lat1);
-    const φ2 = toRad(lat2);
-    const λ1 = toRad(lon1);
-    const λ2 = toRad(lon2);
-    
-    const y = Math.sin(λ2 - λ1) * Math.cos(φ2);
-    const x = Math.cos(φ1) * Math.sin(φ2) -
-              Math.sin(φ1) * Math.cos(φ2) * Math.cos(λ2 - λ1);
-    const θ = Math.atan2(y, x);
-    
-    return (toDeg(θ) + 360) % 360;
-  };
-
-  // Calculate the remaining route from driver to pickup
-  const calculateRemainingRoute = (currentLocation, fullRoute) => {
-    if (!currentLocation || !fullRoute || !window.google) return null;
-    
-    const path = fullRoute.routes[0].overview_path;
-    
-    // Find the closest point on the path to current location
-    let closestPoint = null;
-    let minDistance = Infinity;
-    
-    path.forEach(point => {
-      const distance = window.google.maps.geometry.spherical.computeDistanceBetween(
-        new window.google.maps.LatLng(currentLocation.lat, currentLocation.lng),
-        point
-      );
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestPoint = point;
-      }
-    });
-    
-    // Create a new path from the closest point to the end
-    const remainingPath = path.slice(path.indexOf(closestPoint));
-    
-    return {
-      ...fullRoute,
-      routes: [{
-        ...fullRoute.routes[0],
-        overview_path: remainingPath
-      }]
-    };
-  };
-
-  // Update traffic data and calculate ETA
-  const updateTrafficData = async (location) => {
-    if (!isTrafficEnabled || !window.google || !selectedBooth) return;
-    
-    try {
-      const directionsService = new window.google.maps.DirectionsService();
-      const request = {
-        origin: location,
-        destination: { lat: selectedBooth.latitude, lng: selectedBooth.longitude },
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: window.google.maps.TrafficModel.BEST_GUESS
-        }
-      };
-      
-      directionsService.route(request, (result, status) => {
-        if (status === 'OK') {
-          setTrafficData(result);
-        }
-      });
-    } catch (error) {
-      console.error('Error fetching traffic data:', error);
-    }
-  };
-
-  // Calculate traffic-aware ETA
-  const calculateTrafficAwareETA = async (driverLocation, booth) => {
-    if (!window.google) return;
-
-    try {
-      const directionsService = new window.google.maps.DirectionsService();
-      const request = {
-        origin: driverLocation,
-        destination: { lat: booth.latitude, lng: booth.longitude },
-        travelMode: window.google.maps.TravelMode.DRIVING,
-        drivingOptions: {
-          departureTime: new Date(),
-          trafficModel: window.google.maps.TrafficModel.BEST_GUESS
-        }
-      };
-      
-      directionsService.route(request, (result, status) => {
-        if (status === 'OK') {
-          const route = result.routes[0];
-          const leg = route.legs[0];
-          
-          setDistanceToPickup((leg.distance.value / 1000).toFixed(1));
-          setEstimatedArrivalTime(Math.ceil(leg.duration_in_traffic.value / 60));
-          
-          // Update route with traffic
-          setRemainingRoute(result);
-        }
-      });
-    } catch (error) {
-      console.error('Error calculating traffic-aware ETA:', error);
-    }
-  };
-
-  // Debounced traffic update
-  const debouncedTrafficUpdate = useCallback(
-    debounce((location) => {
-      updateTrafficData(location);
-    }, 30000), // Update every 30 seconds
-    [selectedBooth, isTrafficEnabled]
-  );
-
-  // UI event handlers
+  // UI Handlers
   const handleBookRide = () => {
     setIsBookingFlow(true);
   };
@@ -601,7 +364,7 @@ const UserDashboard = () => {
     }
   };
 
-  // Ride request flow handlers
+  // Calculate fare
   const calculateFare = async () => {
     if (!selectedBooth || !dropCoordinates || !window.google) {
       alert('Please select both pickup and drop locations');
@@ -609,10 +372,8 @@ const UserDashboard = () => {
     }
 
     try {
-      // First, create the service
       const service = new window.google.maps.DistanceMatrixService();
       
-      // Create the request
       const request = {
         origins: [{ lat: selectedBooth.latitude, lng: selectedBooth.longitude }],
         destinations: [{ lat: dropCoordinates.lat, lng: dropCoordinates.lng }],
@@ -620,7 +381,6 @@ const UserDashboard = () => {
         unitSystem: window.google.maps.UnitSystem.METRIC
       };
 
-      // Get the distance matrix
       const response = await new Promise((resolve, reject) => {
         service.getDistanceMatrix(request, (response, status) => {
           if (status === 'OK') {
@@ -631,13 +391,11 @@ const UserDashboard = () => {
         });
       });
 
-      // Check if we have valid results
       if (response.rows[0].elements[0].status === 'OK') {
         const distanceInMeters = response.rows[0].elements[0].distance.value;
         const distanceInKm = distanceInMeters / 1000;
         setDistance(distanceInKm);
         
-        // Calculate fare: ₹10 per km with minimum fare of ₹50
         const calculatedFare = Math.max(50, Math.ceil(distanceInKm * 10));
         setFare(calculatedFare);
         setShowFare(true);
@@ -650,23 +408,46 @@ const UserDashboard = () => {
     }
   };
 
+  // Handle ride request submission
   const handleProceed = async () => {
-    if (!selectedBooth || !dropCoordinates || !fare) return;
-    setIsRequestingRide(true);
-    setRideRequestStatus('sending');
-
-    const socket = getSocket();
-    if (!socket) {
-      setRideRequestStatus('error');
+    console.log('[UserDashboard] Starting ride request...');
+    
+    if (!selectedBooth || !dropCoordinates || !fare) {
+      console.error('[UserDashboard] Missing required data');
+      return;
+    }
+    
+    const token = localStorage.getItem('userToken');
+    if (!token) {
       setNotificationToast({
         type: 'error',
-        message: 'Connection error. Please refresh the page and try again.'
+        message: 'Authentication error. Please login again.'
       });
       return;
     }
+    
+    setIsRequestingRide(true);
+    setRideRequestStatus('sending');
 
-    // Emit ride request via socket
-    const rideRequest = {
+    // Get or initialize socket
+    let socket = getSocket();
+    if (!socket || !socket.connected) {
+      console.log('[UserDashboard] Socket not connected, reinitializing...');
+      socket = initializeSocket(token);
+      
+      if (!socket) {
+        setRideRequestStatus('error');
+        setNotificationToast({
+          type: 'error',
+          message: 'Connection error. Please refresh the page.'
+        });
+        setIsRequestingRide(false);
+        return;
+      }
+    }
+
+    // Prepare ride request data
+    const rideRequestData = {
       userName: user.name,
       userPhone: user.phone,
       pickupLocation: {
@@ -680,24 +461,87 @@ const UserDashboard = () => {
         address: dropLocation
       },
       distance: distance,
-      fare: fare
+      fare: fare,
+      timestamp: new Date().toISOString()
     };
     
+    console.log('[UserDashboard] Sending ride request:', rideRequestData);
+    
+    // Send ride request
+    sendRideRequest(rideRequestData, (response) => {
+      console.log('[UserDashboard] Ride request response:', response);
+      
+      if (response && response.success) {
+        setRideRequestStatus('sent');
+        setRideId(response.rideId);
+      } else {
+        setRideRequestStatus('error');
+        setNotificationToast({
+          type: 'error',
+          message: response?.error || 'Failed to send ride request'
+        });
+      }
+      
+      setIsRequestingRide(false);
+    });
+  };
+
+  // Fetch ride history
+  const fetchRideHistory = async () => {
     try {
-      emitEvent('userRideRequest', rideRequest, (ack) => {
-        if (ack && ack.success) {
-          setRideRequestStatus('sent');
-        } else {
-          setRideRequestStatus('error');
+      setIsLoadingRides(true);
+      const token = localStorage.getItem('userToken');
+      const response = await axios.get('http://localhost:5000/api/ride-history/user-rides', {
+        headers: {
+          Authorization: `Bearer ${token}`
         }
       });
-      
-      // Fallback: if no ack, set to sent after short delay
-      setTimeout(() => {
-        if (rideRequestStatus === 'sending') setRideRequestStatus('sent');
-      }, 2000);
-    } catch (err) {
-      setRideRequestStatus('error');
+
+      if (response.data.success) {
+        setRideHistory(response.data.rides);
+      }
+    } catch (error) {
+      console.error('Error fetching ride history:', error);
+    } finally {
+      setIsLoadingRides(false);
+    }
+  };
+
+  // Fetch ride history when tab changes
+  useEffect(() => {
+    if (activeTab === 'rides') {
+      fetchRideHistory();
+    }
+  }, [activeTab]);
+
+  // Handle chat messages
+  const sendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !rideId) return;
+
+    const message = {
+      rideId,
+      senderId: user._id,
+      senderName: user.name,
+      content: newMessage.trim(),
+      timestamp: new Date()
+    };
+
+    try {
+      const socket = getSocket();
+      if (socket) {
+        socket.emit('sendMessage', message);
+        setMessages(prev => [...prev, message]);
+        setNewMessage('');
+      } else {
+        throw new Error('No socket connection');
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      setNotificationToast({
+        type: 'error',
+        message: 'Failed to send message'
+      });
     }
   };
 
@@ -743,37 +587,6 @@ const UserDashboard = () => {
     window.location.href = `tel:${driverInfo.phone}`;
   };
 
-  // Chat functionality
-  const sendMessage = async (e) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !rideId) return;
-
-    const message = {
-      rideId,
-      senderId: user._id,
-      senderName: user.name,
-      content: newMessage.trim(),
-      timestamp: new Date()
-    };
-
-    try {
-      const socket = getSocket();
-      if (socket) {
-        socket.emit('sendMessage', message);
-        setMessages(prev => [...prev, message]);
-        setNewMessage('');
-      } else {
-        throw new Error('No socket connection');
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      setNotificationToast({
-        type: 'error',
-        message: 'Failed to send message'
-      });
-    }
-  };
-
   // Loading state
   if (!user) return (
     <div className="loading-container">
@@ -792,7 +605,7 @@ const UserDashboard = () => {
     );
   };
 
-  // Chat component
+  // Chat Interface component
   const ChatInterface = () => {
     const chatEndRef = useRef(null);
 
@@ -1116,7 +929,7 @@ const UserDashboard = () => {
           <div className="settings-options">
             <div className="setting-item">
               <div>
-              <h3>Notifications</h3>
+                <h3>Notifications</h3>
                 <p>Receive notifications about your rides</p>
               </div>
               <label className="switch">
@@ -1126,7 +939,7 @@ const UserDashboard = () => {
             </div>
             <div className="setting-item">
               <div>
-              <h3>Dark Mode</h3>
+                <h3>Dark Mode</h3>
                 <p>Switch to dark theme</p>
               </div>
               <label className="switch">
@@ -1153,7 +966,7 @@ const UserDashboard = () => {
                 {driverInfo?.photo ? (
                   <img src={driverInfo.photo} alt={driverInfo.name} />
                 ) : (
-                <i className="fas fa-user"></i>
+                  <i className="fas fa-user"></i>
                 )}
               </div>
               <div className="driver-details">
@@ -1165,11 +978,11 @@ const UserDashboard = () => {
                       className={`fas fa-star ${i < (driverInfo?.rating || 0) ? 'filled' : ''}`}
                     ></i>
                   ))}
-              </div>
+                </div>
                 <div className="vehicle-info">
                   <p>{vehicleInfo?.make} {vehicleInfo?.model}</p>
                   <p className="license-plate">{vehicleInfo?.licensePlate}</p>
-            </div>
+                </div>
                 <p className="driver-phone">{driverInfo?.phone}</p>
                 <div className="driver-status">
                   <div className={`status-indicator ${isDriverMoving ? 'moving' : 'stopped'}`}></div>
@@ -1219,7 +1032,7 @@ const UserDashboard = () => {
                 <i className="fas fa-times"></i>
                 Cancel Ride
               </button>
-          </div>
+            </div>
           </div>
           
           <LoadScript 
@@ -1227,44 +1040,34 @@ const UserDashboard = () => {
             libraries={[...libraries, 'geometry']}
           >
             <div className="map-container">
-            <GoogleMap
-              mapContainerStyle={{ width: '100%', height: '400px' }}
-              center={driverLocation}
-              zoom={13}
+              <GoogleMap
+                mapContainerStyle={{ width: '100%', height: '400px' }}
+                center={driverLocation}
+                zoom={13}
                 onLoad={onMapLoad}
                 options={{
                   trafficLayer: isTrafficEnabled
                 }}
-            >
+              >
                 {isLocationAvailable ? (
                   <>
-              <Marker 
-                position={driverLocation} 
-                icon={{
-                  url: 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+                    <Marker 
+                      position={driverLocation} 
+                      icon={{
+                        url: 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png',
                         scaledSize: new window.google.maps.Size(40, 40),
                         rotation: driverBearing || 0
-                }}
-              />
-              <Marker 
-                position={{ lat: selectedBooth.latitude, lng: selectedBooth.longitude }}
-                icon={{
-                  url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png',
-                  scaledSize: new window.google.maps.Size(40, 40)
-                }}
-              />
-              {remainingRoute && (
-                <DirectionsRenderer 
-                  directions={remainingRoute}
-                  options={{
-                    suppressMarkers: true,
-                    polylineOptions: {
-                      strokeColor: '#2196F3',
-                      strokeWeight: 5,
-                      strokeOpacity: 0.8
-                    }
-                  }}
-                />
+                      }}
+                    />
+                    <Marker 
+                      position={{ lat: selectedBooth.latitude, lng: selectedBooth.longitude }}
+                      icon={{
+                        url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png',
+                        scaledSize: new window.google.maps.Size(40, 40)
+                      }}
+                    />
+                    {directions && (
+                      <DirectionsRenderer directions={directions} />
                     )}
                   </>
                 ) : (
@@ -1275,8 +1078,8 @@ const UserDashboard = () => {
                       Refresh
                     </button>
                   </div>
-              )}
-            </GoogleMap>
+                )}
+              </GoogleMap>
             </div>
           </LoadScript>
           
@@ -1302,6 +1105,8 @@ const UserDashboard = () => {
         </div>
       );
     }
+
+    return null;
   };
 
   // Main component return
@@ -1410,12 +1215,12 @@ const UserDashboard = () => {
 
       {/* Main Content */}
       <div className={`main-content ${!isSidebarOpen ? 'expanded' : ''}`}>
-          {isUploading && (
-            <div className="loading-overlay">
-              <div className="loading-spinner"></div>
-            </div>
-          )}
-          {renderMainContent()}
+        {isUploading && (
+          <div className="loading-overlay">
+            <div className="loading-spinner"></div>
+          </div>
+        )}
+        {renderMainContent()}
       </div>
     </div>
   );

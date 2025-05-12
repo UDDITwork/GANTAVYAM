@@ -18,11 +18,14 @@ const rideHistoryRoutes = require('./routes/rideHistory');
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Socket.IO
-initializeSocket(server);
+// Initialize Socket.IO with server instance
+const io = initializeSocket(server);
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: ['http://localhost:3000', 'http://localhost:3001'],
+  credentials: true
+}));
 app.use(express.json());
 
 // Create uploads directory if it doesn't exist
@@ -36,7 +39,7 @@ if (!fs.existsSync(profileImagesDir)) {
   fs.mkdirSync(profileImagesDir, { recursive: true });
 }
 
-// Serve static files - make sure this comes before routes
+// Serve static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Connect to MongoDB
@@ -71,5 +74,11 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-}); 
+  console.log(`
+  ====================================
+  Server running on port ${PORT}
+  Socket.IO initialized
+  MongoDB connected
+  ====================================
+  `);
+});
