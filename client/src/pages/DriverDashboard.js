@@ -17,6 +17,7 @@ const DriverDashboard = () => {
   const [userLocation, setUserLocation] = useState(null);
   const [directions, setDirections] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
+  const [notificationToast, setNotificationToast] = useState(null);
   const watchId = useRef(null);
 
   // Auth & profile fetch
@@ -118,18 +119,68 @@ const DriverDashboard = () => {
 
   // Accept/Decline ride
   const acceptRide = (ride) => {
-    if (!socket) return;
+    if (!socket || !driver) return;
+    
+    const vehicleDetails = {
+      make: driver.vehicleDetails?.make,
+      model: driver.vehicleDetails?.model,
+      licensePlate: driver.vehicleDetails?.licensePlate
+    };
+
     socket.emit('driverAcceptRide', {
       rideId: ride._id,
-      driverId: driver?._id,
-      driverName: driver?.name,
-      driverPhone: driver?.phone
+      driverId: driver._id,
+      driverName: driver.name,
+      driverPhone: driver.phone,
+      vehicleDetails
     });
-    setActiveRide(ride);
-    setRideRequests([]);
+
+    // Listen for acceptance confirmation
+    socket.once('rideAcceptConfirmed', (response) => {
+      if (response.success) {
+        setActiveRide(ride);
+        setRideRequests([]);
+        // Start sending location updates
+        startLocationUpdates(ride._id);
+      }
+    });
+
+    // Listen for errors
+    socket.once('rideAcceptError', (error) => {
+      console.error('Failed to accept ride:', error.message);
+      setNotificationToast({
+        type: 'error',
+        message: error.message
+      });
+    });
   };
+
   const declineRide = (rideId) => {
     setRideRequests((prev) => prev.filter(r => r._id !== rideId));
+  };
+
+  // Start sending location updates
+  const startLocationUpdates = (rideId) => {
+    if (!navigator.geolocation) return;
+    
+    watchId.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const location = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude
+        };
+        setUserLocation(location);
+        
+        if (socket) {
+          socket.emit('updateDriverLocation', {
+            location,
+            rideId
+          });
+        }
+      },
+      (err) => console.error('Geolocation error:', err),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+    );
   };
 
   // Geolocation: always track driver location

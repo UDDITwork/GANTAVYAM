@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { driverSignup } from '../services/api';
+import './DriverSignup.css'; // Make sure to create this CSS file
 
 const DriverSignup = () => {
   const navigate = useNavigate();
@@ -35,6 +36,7 @@ const DriverSignup = () => {
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [activeSection, setActiveSection] = useState('personal');
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -99,244 +101,372 @@ const DriverSignup = () => {
     }
   };
 
+  const changeSection = (section) => {
+    setActiveSection(section);
+  };
+
   return (
-    <div className="container">
-      <h1>Driver Signup</h1>
-      <Link to="/driver/login">Already registered? Login</Link>
+    <div className="driver-signup-container">
+      <div className="signup-header">
+        <h1>Welcome to GANTAVYAM</h1>
+        <h2>Driver Signup</h2>
+        <p className="login-link">
+          <Link to="/driver/login">Already registered? Login</Link>
+        </p>
+      </div>
       
       {error && <div className="error-message">{error}</div>}
       
-      <form onSubmit={handleSubmit} className="driver-form">
-        {/* Personal Information */}
-        <div className="form-group">
-          <label>Full Name</label>
-          <input
-            type="text"
-            name="fullName"
-            value={formData.fullName}
-            onChange={handleChange}
-            required
-          />
+      <div className="form-progress">
+        <div 
+          className={`progress-step ${activeSection === 'personal' ? 'active' : ''} ${activeSection !== 'personal' ? 'completed' : ''}`}
+          onClick={() => changeSection('personal')}
+        >
+          <div className="step-number">1</div>
+          <div className="step-label">Personal Info</div>
+        </div>
+        <div 
+          className={`progress-step ${activeSection === 'bank' ? 'active' : ''} ${activeSection !== 'personal' && activeSection !== 'bank' ? 'completed' : ''}`}
+          onClick={() => changeSection('bank')}
+        >
+          <div className="step-number">2</div>
+          <div className="step-label">Bank Details</div>
+        </div>
+        <div 
+          className={`progress-step ${activeSection === 'license' ? 'active' : ''} ${activeSection === 'security' ? 'completed' : ''}`}
+          onClick={() => changeSection('license')}
+        >
+          <div className="step-number">3</div>
+          <div className="step-label">Licenses</div>
+        </div>
+        <div 
+          className={`progress-step ${activeSection === 'security' ? 'active' : ''}`}
+          onClick={() => changeSection('security')}
+        >
+          <div className="step-number">4</div>
+          <div className="step-label">Security</div>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="driver-signup-form">
+        {/* Personal Information Section */}
+        <div className={`form-section ${activeSection === 'personal' ? 'active' : ''}`}>
+          <h3>Personal Information</h3>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Full Name</label>
+              <input
+                type="text"
+                name="fullName"
+                value={formData.fullName}
+                onChange={handleChange}
+                required
+                placeholder="Enter your full name"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Mobile Number</label>
+              <input
+                type="text"
+                name="mobileNo"
+                value={formData.mobileNo}
+                onChange={handleChange}
+                required
+                placeholder="Enter your mobile number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Aadhaar Number</label>
+              <input
+                type="text"
+                name="aadhaarNo"
+                value={formData.aadhaarNo}
+                onChange={handleChange}
+                required
+                placeholder="Enter your 12-digit Aadhaar number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Aadhaar Photo</label>
+              <div className="file-input-container">
+                <input
+                  type="file"
+                  name="aadhaarPhoto"
+                  id="aadhaarPhoto"
+                  onChange={handleFileChange}
+                  required
+                  accept="image/*"
+                  className="file-input"
+                />
+                <label htmlFor="aadhaarPhoto" className="file-label">
+                  {files.aadhaarPhoto ? files.aadhaarPhoto.name : 'Choose File'}
+                </label>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Vehicle Number</label>
+              <input
+                type="text"
+                name="vehicleNo"
+                value={formData.vehicleNo}
+                onChange={handleChange}
+                required
+                placeholder="Enter your vehicle number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Registration Certificate Photo</label>
+              <div className="file-input-container">
+                <input
+                  type="file"
+                  name="registrationCertificatePhoto"
+                  id="registrationCertificatePhoto"
+                  onChange={handleFileChange}
+                  required
+                  accept="image/*"
+                  className="file-input"
+                />
+                <label htmlFor="registrationCertificatePhoto" className="file-label">
+                  {files.registrationCertificatePhoto ? files.registrationCertificatePhoto.name : 'Choose File'}
+                </label>
+              </div>
+            </div>
+          </div>
+          <div className="form-buttons">
+            <button type="button" onClick={() => changeSection('bank')} className="next-button">Next</button>
+          </div>
         </div>
 
-        <div className="form-group">
-          <label>Mobile Number</label>
-          <input
-            type="text"
-            name="mobileNo"
-            value={formData.mobileNo}
-            onChange={handleChange}
-            required
-          />
+        {/* Bank Details Section */}
+        <div className={`form-section ${activeSection === 'bank' ? 'active' : ''}`}>
+          <h3>Bank Details</h3>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Bank Name</label>
+              <input
+                type="text"
+                name="bankName"
+                value={formData.bankName}
+                onChange={handleChange}
+                required
+                placeholder="Enter your bank name"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>IFSC Code</label>
+              <input
+                type="text"
+                name="ifscCode"
+                value={formData.ifscCode}
+                onChange={handleChange}
+                required
+                placeholder="Enter IFSC code"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Account Number</label>
+              <input
+                type="text"
+                name="accountNumber"
+                value={formData.accountNumber}
+                onChange={handleChange}
+                required
+                placeholder="Enter account number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Account Holder Name</label>
+              <input
+                type="text"
+                name="accountHolderName"
+                value={formData.accountHolderName}
+                onChange={handleChange}
+                required
+                placeholder="Enter account holder name"
+              />
+            </div>
+          </div>
+          <div className="form-buttons">
+            <button type="button" onClick={() => changeSection('personal')} className="back-button">Back</button>
+            <button type="button" onClick={() => changeSection('license')} className="next-button">Next</button>
+          </div>
         </div>
 
-        <div className="form-group">
-          <label>Aadhaar Number</label>
-          <input
-            type="text"
-            name="aadhaarNo"
-            value={formData.aadhaarNo}
-            onChange={handleChange}
-            required
-          />
+        {/* License and Certificates Section */}
+        <div className={`form-section ${activeSection === 'license' ? 'active' : ''}`}>
+          <h3>License and Certificates</h3>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Driving License Number</label>
+              <input
+                type="text"
+                name="drivingLicenseNo"
+                value={formData.drivingLicenseNo}
+                onChange={handleChange}
+                required
+                placeholder="Enter driving license number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Driving License Photo</label>
+              <div className="file-input-container">
+                <input
+                  type="file"
+                  name="drivingLicensePhoto"
+                  id="drivingLicensePhoto"
+                  onChange={handleFileChange}
+                  required
+                  accept="image/*"
+                  className="file-input"
+                />
+                <label htmlFor="drivingLicensePhoto" className="file-label">
+                  {files.drivingLicensePhoto ? files.drivingLicensePhoto.name : 'Choose File'}
+                </label>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Permit Number</label>
+              <input
+                type="text"
+                name="permitNo"
+                value={formData.permitNo}
+                onChange={handleChange}
+                required
+                placeholder="Enter permit number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Permit Photo</label>
+              <div className="file-input-container">
+                <input
+                  type="file"
+                  name="permitPhoto"
+                  id="permitPhoto"
+                  onChange={handleFileChange}
+                  required
+                  accept="image/*"
+                  className="file-input"
+                />
+                <label htmlFor="permitPhoto" className="file-label">
+                  {files.permitPhoto ? files.permitPhoto.name : 'Choose File'}
+                </label>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Fitness Certificate Number</label>
+              <input
+                type="text"
+                name="fitnessCertificateNo"
+                value={formData.fitnessCertificateNo}
+                onChange={handleChange}
+                required
+                placeholder="Enter fitness certificate number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Fitness Certificate Photo</label>
+              <div className="file-input-container">
+                <input
+                  type="file"
+                  name="fitnessCertificatePhoto"
+                  id="fitnessCertificatePhoto"
+                  onChange={handleFileChange}
+                  required
+                  accept="image/*"
+                  className="file-input"
+                />
+                <label htmlFor="fitnessCertificatePhoto" className="file-label">
+                  {files.fitnessCertificatePhoto ? files.fitnessCertificatePhoto.name : 'Choose File'}
+                </label>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Insurance Policy Number</label>
+              <input
+                type="text"
+                name="insurancePolicyNo"
+                value={formData.insurancePolicyNo}
+                onChange={handleChange}
+                required
+                placeholder="Enter insurance policy number"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Insurance Policy Photo</label>
+              <div className="file-input-container">
+                <input
+                  type="file"
+                  name="insurancePolicyPhoto"
+                  id="insurancePolicyPhoto"
+                  onChange={handleFileChange}
+                  required
+                  accept="image/*"
+                  className="file-input"
+                />
+                <label htmlFor="insurancePolicyPhoto" className="file-label">
+                  {files.insurancePolicyPhoto ? files.insurancePolicyPhoto.name : 'Choose File'}
+                </label>
+              </div>
+            </div>
+          </div>
+          <div className="form-buttons">
+            <button type="button" onClick={() => changeSection('bank')} className="back-button">Back</button>
+            <button type="button" onClick={() => changeSection('security')} className="next-button">Next</button>
+          </div>
         </div>
 
-        <div className="form-group">
-          <label>Aadhaar Photo</label>
-          <input
-            type="file"
-            name="aadhaarPhoto"
-            onChange={handleFileChange}
-            required
-            accept="image/*"
-          />
-        </div>
+        {/* Security Section */}
+        <div className={`form-section ${activeSection === 'security' ? 'active' : ''}`}>
+          <h3>Security</h3>
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Password</label>
+              <input
+                type="password"
+                name="password"
+                value={formData.password}
+                onChange={handleChange}
+                required
+                minLength="6"
+                placeholder="Create a password (min. 6 characters)"
+              />
+            </div>
 
-        {/* Vehicle Information */}
-        <div className="form-group">
-          <label>Vehicle Number</label>
-          <input
-            type="text"
-            name="vehicleNo"
-            value={formData.vehicleNo}
-            onChange={handleChange}
-            required
-          />
+            <div className="form-group">
+              <label>Confirm Password</label>
+              <input
+                type="password"
+                name="confirmPassword"
+                value={formData.confirmPassword}
+                onChange={handleChange}
+                required
+                minLength="6"
+                placeholder="Confirm your password"
+              />
+            </div>
+          </div>
+          <div className="form-buttons">
+            <button type="button" onClick={() => changeSection('license')} className="back-button">Back</button>
+            <button type="submit" disabled={loading} className="submit-button">
+              {loading ? 'Signing up...' : 'Sign Up'}
+            </button>
+          </div>
         </div>
-
-        <div className="form-group">
-          <label>Registration Certificate Photo</label>
-          <input
-            type="file"
-            name="registrationCertificatePhoto"
-            onChange={handleFileChange}
-            required
-            accept="image/*"
-          />
-        </div>
-
-        {/* Bank Details */}
-        <div className="form-group">
-          <label>Bank Name</label>
-          <input
-            type="text"
-            name="bankName"
-            value={formData.bankName}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>IFSC Code</label>
-          <input
-            type="text"
-            name="ifscCode"
-            value={formData.ifscCode}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Account Number</label>
-          <input
-            type="text"
-            name="accountNumber"
-            value={formData.accountNumber}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Account Holder Name</label>
-          <input
-            type="text"
-            name="accountHolderName"
-            value={formData.accountHolderName}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        {/* License and Certificates */}
-        <div className="form-group">
-          <label>Driving License Number</label>
-          <input
-            type="text"
-            name="drivingLicenseNo"
-            value={formData.drivingLicenseNo}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Driving License Photo</label>
-          <input
-            type="file"
-            name="drivingLicensePhoto"
-            onChange={handleFileChange}
-            required
-            accept="image/*"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Permit Number</label>
-          <input
-            type="text"
-            name="permitNo"
-            value={formData.permitNo}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Permit Photo</label>
-          <input
-            type="file"
-            name="permitPhoto"
-            onChange={handleFileChange}
-            required
-            accept="image/*"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Fitness Certificate Number</label>
-          <input
-            type="text"
-            name="fitnessCertificateNo"
-            value={formData.fitnessCertificateNo}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Fitness Certificate Photo</label>
-          <input
-            type="file"
-            name="fitnessCertificatePhoto"
-            onChange={handleFileChange}
-            required
-            accept="image/*"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Insurance Policy Number</label>
-          <input
-            type="text"
-            name="insurancePolicyNo"
-            value={formData.insurancePolicyNo}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Insurance Policy Photo</label>
-          <input
-            type="file"
-            name="insurancePolicyPhoto"
-            onChange={handleFileChange}
-            required
-            accept="image/*"
-          />
-        </div>
-
-        {/* Password Fields */}
-        <div className="form-group">
-          <label>Password</label>
-          <input
-            type="password"
-            name="password"
-            value={formData.password}
-            onChange={handleChange}
-            required
-            minLength="6"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Confirm Password</label>
-          <input
-            type="password"
-            name="confirmPassword"
-            value={formData.confirmPassword}
-            onChange={handleChange}
-            required
-            minLength="6"
-          />
-        </div>
-
-        <button type="submit" disabled={loading} className="submit-btn">
-          {loading ? 'Signing up...' : 'Sign Up'}
-        </button>
       </form>
     </div>
   );

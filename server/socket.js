@@ -127,6 +127,87 @@ const initializeSocket = (server) => {
       }
     });
 
+    // Handle driver accepting a ride
+    socket.on('driverAcceptRide', async (data) => {
+      try {
+        const { rideId, driverId, driverName, driverPhone, vehicleDetails } = data;
+        
+        // Update ride request in database
+        const rideRequest = await RideRequest.findById(rideId);
+        if (!rideRequest) {
+          socket.emit('rideAcceptError', { message: 'Ride request not found' });
+          return;
+        }
+
+        if (rideRequest.status !== 'pending') {
+          socket.emit('rideAcceptError', { message: 'Ride is no longer available' });
+          return;
+        }
+
+        // Update ride request
+        rideRequest.status = 'accepted';
+        rideRequest.driverId = driverId;
+        rideRequest.acceptedAt = new Date();
+        await rideRequest.save();
+
+        // Get driver details
+        const driver = await Driver.findById(driverId);
+        
+        // Notify the user
+        io.to(`user_${rideRequest.userId}`).emit('rideAccepted', {
+          rideId: rideRequest._id,
+          driverId: driverId,
+          driverName: driverName,
+          driverPhone: driverPhone,
+          driverPhoto: driver?.profileImage,
+          driverRating: driver?.rating,
+          vehicleMake: vehicleDetails?.make,
+          vehicleModel: vehicleDetails?.model,
+          licensePlate: vehicleDetails?.licensePlate,
+          timestamp: new Date()
+        });
+
+        // Notify other drivers that this ride is taken
+        io.to('drivers').emit('rideRequestClosed', {
+          rideId: rideRequest._id
+        });
+
+        // Confirm to the accepting driver
+        socket.emit('rideAcceptConfirmed', {
+          success: true,
+          rideId: rideRequest._id
+        });
+
+      } catch (error) {
+        console.error('Error accepting ride:', error);
+        socket.emit('rideAcceptError', { message: 'Failed to accept ride' });
+      }
+    });
+
+    // Handle driver location updates
+    socket.on('updateDriverLocation', async (data) => {
+      try {
+        const { location, rideId } = data;
+        
+        // Update driver's location in database
+        await Driver.findByIdAndUpdate(socket.user._id, {
+          currentLocation: location
+        });
+
+        // Broadcast location to the user
+        const rideRequest = await RideRequest.findById(rideId);
+        if (rideRequest && rideRequest.userId) {
+          io.to(`user_${rideRequest.userId}`).emit('driverLocationUpdated', {
+            rideId,
+            location,
+            timestamp: new Date()
+          });
+        }
+      } catch (error) {
+        console.error('Error updating driver location:', error);
+      }
+    });
+
     // Rest of your socket handlers...
     // (Keep all the other socket event handlers from your original file)
 

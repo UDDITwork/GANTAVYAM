@@ -1,13 +1,24 @@
 // routes/admin.js
 const express = require('express');
 const router = express.Router();
-const { getAllDrivers, getDriverById, getAllUsers, getUserById } = require('../controllers/adminController');
+const { adminProtect } = require('../middleware/auth');
+const { driverFileUpload } = require('../middleware/upload');
+const { registerDriver } = require('../controllers/driverController');
+const { 
+  getAllDrivers, 
+  getDriverById,
+  getAllUsers,
+  getUserById 
+} = require('../controllers/adminController');
 
-// Define routes
-router.get('/users', getAllUsers);         // GET all users
-router.get('/users/:id', getUserById);     // GET single user
+// Admin routes for driver management
+router.get('/drivers', adminProtect, getAllDrivers);
+router.get('/drivers/:id', adminProtect, getDriverById);
+router.post('/drivers', adminProtect, driverFileUpload, registerDriver);
 
-router.get('/drivers', getAllDrivers);
-router.get('/drivers/:id', getDriverById);
+// Admin routes for user management
+router.get('/users', adminProtect, getAllUsers);
+router.get('/users/:id', adminProtect, getUserById);
 
+// Export router
 module.exports = router;

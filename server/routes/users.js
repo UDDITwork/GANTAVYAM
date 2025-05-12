@@ -1,12 +1,12 @@
+// routes/users.js
 const express = require('express');
 const router = express.Router();
 const { registerUser, userLogin } = require('../controllers/userController');
-const protectUser = require('../middleware/userAuth');
+const { protect } = require('../middleware/auth'); // Import the named function
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const User = require('../models/User');
-const auth = require('../middleware/auth');
 
 // Configure multer for file upload
 const storage = multer.diskStorage({
@@ -44,7 +44,7 @@ router.post('/register', registerUser);
 router.post('/login', userLogin);
 
 // Upload profile image
-router.post('/profile-image', auth, upload.single('profileImage'), async (req, res) => {
+router.post('/profile-image', protect, upload.single('profileImage'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -53,8 +53,9 @@ router.post('/profile-image', auth, upload.single('profileImage'), async (req, r
       });
     }
 
-    // Get the user
-    const user = await User.findById(req.user.id);
+    // Get the user - note that we now use req.driver instead of req.user
+    // We could also modify the auth middleware to set req.user for compatibility
+    const user = await User.findById(req.driver.id);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -106,9 +107,9 @@ router.post('/profile-image', auth, upload.single('profileImage'), async (req, r
 });
 
 // Get user profile
-router.get('/profile', auth, async (req, res) => {
+router.get('/profile', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id)
+    const user = await User.findById(req.driver.id)
       .select('-password')
       .populate('rideHistory');
     
@@ -126,10 +127,10 @@ router.get('/profile', auth, async (req, res) => {
 });
 
 // Update user profile
-router.put('/profile', auth, async (req, res) => {
+router.put('/profile', protect, async (req, res) => {
   try {
     const { name, phone } = req.body;
-    const user = await User.findById(req.user._id);
+    const user = await User.findById(req.driver.id);
 
     if (name) user.name = name;
     if (phone) user.phone = phone;

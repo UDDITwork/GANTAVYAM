@@ -1,13 +1,13 @@
 // controllers/adminController.js
 const Driver = require('../models/Driver');
-const User = require('../models/User'); // ⬅ make sure this is imported
+const User = require('../models/User');
 
-// @desc    Get all drivers (for booth admin)
+// @desc    Get all drivers
 // @route   GET /api/admin/drivers
-// @access  Private (admin only, but we'll implement auth later)
+// @access  Private (Admin only)
 exports.getAllDrivers = async (req, res) => {
   try {
-    const drivers = await Driver.find();
+    const drivers = await Driver.find().select('-password');
     
     res.status(200).json({
       success: true,
@@ -15,18 +15,157 @@ exports.getAllDrivers = async (req, res) => {
       data: drivers
     });
   } catch (error) {
-    console.error(error);
+    console.error('Error fetching drivers:', error);
     res.status(500).json({
       success: false,
-      error: 'Server Error'
+      error: 'Server error while fetching drivers'
     });
   }
 };
 
-// @desc    Get driver by ID (for booth admin)
+// @desc    Get driver by ID
 // @route   GET /api/admin/drivers/:id
-// @access  Private (admin only)
+// @access  Private (Admin only)
 exports.getDriverById = async (req, res) => {
+  try {
+    const driver = await Driver.findById(req.params.id).select('-password');
+    
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        error: 'Driver not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: driver
+    });
+  } catch (error) {
+    console.error('Error fetching driver:', error);
+    
+    // Check if error is due to invalid ID format
+    if (error.kind === 'ObjectId') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid driver ID format'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      error: 'Server error while fetching driver'
+    });
+  }
+};
+
+// @desc    Get all users
+// @route   GET /api/admin/users
+// @access  Private (Admin only)
+exports.getAllUsers = async (req, res) => {
+  try {
+    const users = await User.find().select('-password');
+    
+    res.status(200).json({
+      success: true,
+      count: users.length,
+      data: users
+    });
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error while fetching users'
+    });
+  }
+};
+
+// @desc    Get user by ID
+// @route   GET /api/admin/users/:id
+// @access  Private (Admin only)
+exports.getUserById = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('-password');
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: user
+    });
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    
+    // Check if error is due to invalid ID format
+    if (error.kind === 'ObjectId') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid user ID format'
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      error: 'Server error while fetching user'
+    });
+  }
+};
+
+// @desc    Update driver verification status
+// @route   PUT /api/admin/drivers/:id/verify
+// @access  Private (Admin only)
+exports.verifyDriver = async (req, res) => {
+  try {
+    const { isVerified } = req.body;
+    
+    if (isVerified === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide isVerified field'
+      });
+    }
+    
+    const driver = await Driver.findByIdAndUpdate(
+      req.params.id,
+      { 
+        isVerified: isVerified,
+        $set: { 
+          lastRenewalDate: isVerified ? Date.now() : undefined 
+        }
+      },
+      { new: true }
+    );
+    
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        error: 'Driver not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Driver ${isVerified ? 'verified' : 'unverified'} successfully`,
+      data: driver
+    });
+  } catch (error) {
+    console.error('Error updating driver verification status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Server error while updating driver verification status'
+    });
+  }
+};
+
+// @desc    Delete driver
+// @route   DELETE /api/admin/drivers/:id
+// @access  Private (Admin only)
+exports.deleteDriver = async (req, res) => {
   try {
     const driver = await Driver.findById(req.params.id);
     
@@ -36,39 +175,18 @@ exports.getDriverById = async (req, res) => {
         error: 'Driver not found'
       });
     }
-
+    
+    await Driver.findByIdAndDelete(req.params.id);
+    
     res.status(200).json({
       success: true,
-      data: driver
+      message: 'Driver deleted successfully'
     });
   } catch (error) {
-    console.error(error);
+    console.error('Error deleting driver:', error);
     res.status(500).json({
       success: false,
-      error: 'Server Error'
+      error: 'Server error while deleting driver'
     });
-  }
-};
-
-// GET /api/admin/users → List all customers
-exports.getAllUsers = async (req, res) => {
-  try {
-    const users = await User.find().select('name email phone');
-    res.status(200).json({ success: true, count: users.length, data: users });
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Failed to fetch users' });
-  }
-};
-
-// GET /api/admin/users/:id → Get single user details
-exports.getUserById = async (req, res) => {
-  try {
-    const user = await User.findById(req.params.id).select('name email phone');
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
-    res.status(200).json({ success: true, data: user });
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'Failed to fetch user' });
   }
 };

@@ -2,27 +2,30 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
-const userSchema = new mongoose.Schema({
+const UserSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true,
-    trim: true
+    required: [true, 'Please add a name']
   },
   email: {
     type: String,
-    required: true,
+    required: [true, 'Please add an email'],
     unique: true,
-    trim: true,
-    lowercase: true
+    match: [
+      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
+      'Please add a valid email'
+    ]
   },
   phone: {
     type: String,
-    required: true,
-    trim: true
+    required: [true, 'Please add a phone number'],
+    unique: true
   },
   password: {
     type: String,
-    required: true
+    required: [true, 'Please add a password'],
+    minlength: 6,
+    select: false
   },
   profileImage: {
     type: String,
@@ -32,35 +35,65 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: 'user'
   },
-  createdAt: {
+  rideHistory: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Ride'
+  }],
+  favorites: [{
+    name: String,
+    location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point'
+      },
+      coordinates: {
+        type: [Number],
+        default: [0, 0]
+      }
+    }
+  }],
+  paymentMethods: [{
+    type: {
+      type: String,
+      enum: ['card', 'upi', 'cash'],
+      default: 'cash'
+    },
+    details: {
+      type: mongoose.Schema.Types.Mixed
+    },
+    isDefault: {
+      type: Boolean,
+      default: false
+    }
+  }],
+  lastLogin: {
     type: Date,
     default: Date.now
   },
-  lastLogin: {
-    type: Date
-  },
-  rideHistory: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'RideRequest'
-  }]
-});
-
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
-  
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error);
+  createdAt: {
+    type: Date,
+    default: Date.now
   }
 });
 
-// Method to compare password
-userSchema.methods.comparePassword = async function(candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.password);
+// Encrypt password using bcrypt
+UserSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) {
+    next();
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+  next();
+});
+
+// Match user entered password to hashed password in database
+UserSchema.methods.matchPassword = async function(enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
 };
 
-module.exports = mongoose.model('User', userSchema);
+// Add geospatial index for favorites locations
+UserSchema.index({ 'favorites.location': '2dsphere' });
+
+module.exports = mongoose.model('User', UserSchema);
