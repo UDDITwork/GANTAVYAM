@@ -190,11 +190,12 @@ const initializeSocket = (server) => {
       }
     });
 
-    // Handle driver accepting a ride
+    // Handle driver accepting a ride (ENHANCED VERSION)
     socket.on('driverAcceptRide', async (data) => {
       console.log('\n=== DRIVER ACCEPTING RIDE ===');
+      console.log('Driver Socket ID:', socket.id);
       console.log('Driver ID:', socket.user._id);
-      console.log('Accept data:', data);
+      console.log('Accept data:', JSON.stringify(data, null, 2));
       
       try {
         const { rideId, driverId, driverName, driverPhone, vehicleDetails } = data;
@@ -214,7 +215,7 @@ const initializeSocket = (server) => {
           return;
         }
 
-        // Update ride request
+        // Update ride request with driver details
         rideRequest.status = 'accepted';
         rideRequest.driverId = driverId;
         rideRequest.acceptedAt = new Date();
@@ -222,24 +223,25 @@ const initializeSocket = (server) => {
         
         console.log('✅ Ride request updated in database');
 
-        // Get driver details
+        // Get driver details for sending to user
         const driver = await Driver.findById(driverId);
         
-        // Notify the user
+        // Prepare acceptance data
         const acceptanceData = {
           rideId: rideRequest._id.toString(),
           driverId: driverId,
           driverName: driverName,
           driverPhone: driverPhone,
-          driverPhoto: driver?.profileImage,
+          driverPhoto: driver?.profileImage || null,
           driverRating: driver?.rating || 4.5,
           vehicleMake: vehicleDetails?.make || 'Unknown',
           vehicleModel: vehicleDetails?.model || 'Unknown',
           licensePlate: vehicleDetails?.licensePlate || 'Unknown',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          driverLocation: data.currentLocation
         };
         
-        console.log('Notifying user:', rideRequest.userId);
+        console.log('📤 Notifying user:', rideRequest.userId);
         io.to(`user_${rideRequest.userId}`).emit('rideAccepted', acceptanceData);
         
         // Notify other drivers that this ride is taken
@@ -247,13 +249,19 @@ const initializeSocket = (server) => {
           rideId: rideRequest._id.toString()
         });
         
-        console.log('✅ Notifications sent');
+        console.log('✅ All notifications sent');
 
         // Confirm to the accepting driver
         socket.emit('rideAcceptConfirmed', {
           success: true,
           rideId: rideRequest._id.toString(),
-          message: 'Ride accepted successfully'
+          message: 'Ride accepted successfully',
+          userDetails: {
+            name: rideRequest.userName,
+            phone: rideRequest.userPhone,
+            pickupLocation: rideRequest.pickupLocation,
+            dropLocation: rideRequest.dropLocation
+          }
         });
 
       } catch (error) {
@@ -265,37 +273,124 @@ const initializeSocket = (server) => {
       }
     });
 
-    // Handle driver location updates
+    // Handle ride cancellation
+    socket.on('cancelRide', async (data) => {
+      console.log('\n=== RIDE CANCELLATION ===');
+      console.log('Requester:', socket.user.role, socket.user._id);
+      console.log('Ride ID:', data.rideId);
+      
+      try {
+        const { rideId, reason } = data;
+        
+        const rideRequest = await RideRequest.findById(rideId);
+        if (!rideRequest) {
+          console.error('❌ Ride not found');
+          socket.emit('rideCancelError', { message: 'Ride not found' });
+          return;
+        }
+        
+        // Update ride status
+        rideRequest.status = 'cancelled';
+        rideRequest.cancelledAt = new Date();
+        rideRequest.cancellationReason = reason || 'No reason provided';
+        rideRequest.cancelledBy = socket.user.role;
+        await rideRequest.save();
+        
+        console.log('✅ Ride cancelled in database');
+        
+        // Notify both parties
+        if (socket.user.role === 'driver') {
+          // Driver cancelled - notify user
+          io.to(`user_${rideRequest.userId}`).emit('rideCancelled', {
+            rideId: rideId,
+            cancelledBy: 'driver',
+            reason: reason
+          });
+          console.log('📤 User notified of cancellation');
+        } else {
+          // User cancelled - notify driver
+          if (rideRequest.driverId) {
+            io.to(`driver_${rideRequest.driverId}`).emit('rideCancelled', {
+              rideId: rideId,
+              cancelledBy: 'user',
+              reason: reason
+            });
+            console.log('📤 Driver notified of cancellation');
+          }
+        }
+        
+        socket.emit('rideCancelConfirmed', {
+          success: true,
+          message: 'Ride cancelled successfully'
+        });
+        
+      } catch (error) {
+        console.error('❌ Error cancelling ride:', error);
+        socket.emit('rideCancelError', {
+          message: 'Failed to cancel ride',
+          error: error.message
+        });
+      }
+    });
+
+    // Enhanced driver location updates with logging
     socket.on('updateDriverLocation', async (data) => {
       console.log('\n=== DRIVER LOCATION UPDATE ===');
       console.log('Driver ID:', socket.user._id);
       console.log('Location:', data.location);
       console.log('Ride ID:', data.rideId);
+      console.log('Timestamp:', data.timestamp);
       
       try {
-        const { location, rideId } = data;
+        const { location, rideId, bearing, speed } = data;
         
         // Update driver's location in database
         await Driver.findByIdAndUpdate(socket.user._id, {
           currentLocation: location,
-          lastLocationUpdate: new Date()
+          lastLocationUpdate: new Date(),
+          currentBearing: bearing,
+          currentSpeed: speed
         });
 
-        // If there's an active ride, notify the user
+        // If there's an active ride, notify the user with enhanced data
         if (rideId) {
           const rideRequest = await RideRequest.findById(rideId);
           if (rideRequest && rideRequest.userId) {
-            io.to(`user_${rideRequest.userId}`).emit('driverLocationUpdated', {
+            const locationUpdate = {
               rideId,
               location,
+              bearing,
+              speed,
               timestamp: new Date().toISOString()
-            });
+            };
+            
+            io.to(`user_${rideRequest.userId}`).emit('driverLocationUpdated', locationUpdate);
             console.log('✅ Location update sent to user');
           }
         }
       } catch (error) {
         console.error('❌ Error updating driver location:', error);
+        socket.emit('locationUpdateError', {
+          message: 'Failed to update location',
+          error: error.message
+        });
       }
+    });
+
+    // Add debug endpoint to provide room membership info
+    socket.on('getRoomInfo', () => {
+      const rooms = Array.from(socket.rooms);
+      const driversRoom = io.sockets.adapter.rooms.get('drivers');
+      const driversCount = driversRoom ? driversRoom.size : 0;
+
+      socket.emit('roomInfo', {
+        socketId: socket.id,
+        userId: socket.user._id,
+        role: socket.user.role,
+        rooms: rooms,
+        driversOnline: driversCount,
+        inDriversRoom: rooms.includes('drivers')
+      });
     });
 
     // Handle disconnection

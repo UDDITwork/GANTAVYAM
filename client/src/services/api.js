@@ -100,7 +100,10 @@ export const auth = {
       if (response.data.token) {
         localStorage.setItem('driverToken', response.data.token);
         localStorage.setItem('driverRole', 'driver');
-        localStorage.setItem('driver', JSON.stringify(response.data.driver));
+        localStorage.setItem('driver', JSON.stringify({
+          ...response.data.driver,
+          role: 'driver'
+        }));
       }
       return response.data;
     } catch (error) {

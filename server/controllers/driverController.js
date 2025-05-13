@@ -210,7 +210,10 @@ exports.registerDriver = async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { id: savedDriver._id, role: 'driver' },
+      { 
+        id: savedDriver._id,
+        role: 'driver'
+      },
       process.env.JWT_SECRET || 'your_jwt_secret',
       { expiresIn: '30d' }
     );
@@ -222,7 +225,8 @@ exports.registerDriver = async (req, res) => {
       driver: {
         id: savedDriver._id,
         fullName: savedDriver.fullName,
-        mobileNo: savedDriver.mobileNo
+        mobileNo: savedDriver.mobileNo,
+        role: 'driver'
       }
     });
     
@@ -307,7 +311,10 @@ exports.loginDriver = async (req, res) => {
 
     // Create token
     const token = jwt.sign(
-      { id: driver._id, role: 'driver' },
+      { 
+        id: driver._id,
+        role: 'driver'
+      },
       process.env.JWT_SECRET || 'your_jwt_secret',
       { expiresIn: '30d' }
     );
@@ -322,7 +329,8 @@ exports.loginDriver = async (req, res) => {
         id: driver._id,
         fullName: driver.fullName,
         mobileNo: driver.mobileNo,
-        isVerified: driver.isVerified
+        isVerified: driver.isVerified,
+        role: 'driver'
       }
     });
   } catch (error) {

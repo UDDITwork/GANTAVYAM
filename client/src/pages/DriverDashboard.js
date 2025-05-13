@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { GoogleMap, LoadScript, Marker, DirectionsRenderer } from '@react-google-maps/api';
 import { initializeSocket, getSocket, disconnectSocket } from '../services/socket';
 import './DriverDashboard.css';
+import axios from 'axios';
 
 const GOOGLE_MAPS_API_KEY = 'AIzaSyDFbjmVJoi2wDzwJNR2rrowpSEtSes1jw4';
 const libraries = ['places'];
@@ -138,6 +139,31 @@ const DriverDashboard = () => {
         socketInstance.on('statusUpdated', (data) => {
           console.log('[DriverDashboard] Status update confirmation:', data);
         });
+        // Additional event listeners for ride cancellation and location update errors
+        socketInstance.on('rideCancelled', (data) => {
+          console.log('[DriverDashboard] Ride cancelled:', data);
+          if (activeRide && activeRide._id === data.rideId) {
+            setActiveRide(null);
+            setNotificationToast({
+              type: 'warning',
+              message: `Ride cancelled by ${data.cancelledBy}: ${data.reason || 'No reason provided'}`
+            });
+            // Stop location updates
+            if (watchId.current) {
+              navigator.geolocation.clearWatch(watchId.current);
+              watchId.current = null;
+            }
+          }
+          setTimeout(() => setNotificationToast(null), 5000);
+        });
+        socketInstance.on('locationUpdateError', (error) => {
+          console.error('[DriverDashboard] Location update error:', error);
+          setNotificationToast({
+            type: 'error',
+            message: 'Failed to update location. Please check GPS.'
+          });
+          setTimeout(() => setNotificationToast(null), 3000);
+        });
       }
     }
     // Cleanup
@@ -146,36 +172,104 @@ const DriverDashboard = () => {
     };
   }, [driver]);
 
-  // Start sending location updates
-  const startLocationUpdates = (rideId) => {
-    console.log('[DriverDashboard] Starting location updates for ride:', rideId);
-    
-    if (!navigator.geolocation) {
-      console.error('[DriverDashboard] Geolocation not available');
+  // Enhanced accept ride function with better error handling
+  const acceptRide = (ride) => {
+    console.log('[DriverDashboard] Accepting ride:', ride);
+    if (!socket || !driver) {
+      console.error('[DriverDashboard] Cannot accept ride: no socket or driver data');
+      setNotificationToast({
+        type: 'error',
+        message: 'Connection error. Please refresh the page.'
+      });
       return;
     }
-    
-    // Clear any existing watch
+    const vehicleDetails = {
+      make: driver.vehicleDetails?.make || 'Unknown',
+      model: driver.vehicleDetails?.model || 'Model',
+      licensePlate: driver.vehicleDetails?.licensePlate || driver.vehicleNo || 'XX-0000',
+      color: driver.vehicleDetails?.color || 'Unknown'
+    };
+    console.log('[DriverDashboard] Sending acceptance with details:', {
+      rideId: ride._id,
+      driverId: driver._id || driver.id,
+      vehicleDetails
+    });
+    socket.emit('driverAcceptRide', {
+      rideId: ride._id,
+      driverId: driver._id || driver.id,
+      driverName: driver.fullName || driver.name,
+      driverPhone: driver.mobileNo || driver.phone,
+      driverPhoto: driver.profileImage || null,
+      driverRating: driver.rating || 4.5,
+      vehicleDetails,
+      currentLocation: userLocation,
+      timestamp: new Date().toISOString()
+    });
+    setActiveRide(ride);
+    setRideRequests([]);
+    startLocationUpdates(ride._id);
+    console.log('[DriverDashboard] Ride acceptance sent, waiting for confirmation...');
+  };
+
+  // Add ride cancellation function
+  const cancelRide = () => {
+    if (!activeRide || !socket) return;
+    console.log('[DriverDashboard] Cancelling ride:', activeRide._id);
+    socket.emit('cancelRide', {
+      rideId: activeRide._id,
+      reason: 'Driver cancelled'
+    });
+    setActiveRide(null);
+    setNotificationToast({
+      type: 'info',
+      message: 'Ride cancelled'
+    });
+    if (watchId.current) {
+      navigator.geolocation.clearWatch(watchId.current);
+      watchId.current = null;
+    }
+  };
+
+  // Enhanced location updates with error handling
+  const startLocationUpdates = (rideId) => {
+    console.log('[DriverDashboard] Starting location updates for ride:', rideId);
+    if (!navigator.geolocation) {
+      console.error('[DriverDashboard] Geolocation not available');
+      setNotificationToast({
+        type: 'error',
+        message: 'GPS not available on this device'
+      });
+      return;
+    }
     if (watchId.current) {
       navigator.geolocation.clearWatch(watchId.current);
     }
-    
+    let lastLocationTime = Date.now();
     watchId.current = navigator.geolocation.watchPosition(
       (pos) => {
+        const now = Date.now();
+        if (now - lastLocationTime < 5000) return;
+        lastLocationTime = now;
         const location = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude
         };
+        console.log(`[DriverDashboard] Sending location update: ${location.lat}, ${location.lng}`);
         setUserLocation(location);
-        
-        if (socket) {
-          // Emit location update with additional data
+        if (socket && socket.connected) {
           socket.emit('updateDriverLocation', {
             location,
             rideId,
             timestamp: new Date().toISOString(),
             bearing: pos.coords.heading || 0,
-            speed: pos.coords.speed || 0
+            speed: pos.coords.speed || 0,
+            accuracy: pos.coords.accuracy
+          });
+        } else {
+          console.error('[DriverDashboard] Socket not connected for location update');
+          setNotificationToast({
+            type: 'warning',
+            message: 'Connection lost. Trying to reconnect...'
           });
         }
       },
@@ -183,8 +277,9 @@ const DriverDashboard = () => {
         console.error('[DriverDashboard] Geolocation error:', err);
         setNotificationToast({
           type: 'error',
-          message: 'Error getting location. Please check your GPS settings.'
+          message: `Location error: ${err.message}`
         });
+        // Don't clear the watch, keep trying
       },
       { 
         enableHighAccuracy: true,
@@ -192,54 +287,6 @@ const DriverDashboard = () => {
         timeout: 10000
       }
     );
-  };
-
-  // Accept ride function
-  const acceptRide = (ride) => {
-    console.log('[DriverDashboard] Accepting ride:', ride);
-    
-    if (!socket || !driver) {
-      console.error('[DriverDashboard] Cannot accept ride: no socket or driver data');
-      return;
-    }
-    
-    const vehicleDetails = {
-      make: driver.vehicleDetails?.make || 'Unknown',
-      model: driver.vehicleDetails?.model || 'Model',
-      licensePlate: driver.vehicleDetails?.licensePlate || 'XX-0000',
-      color: driver.vehicleDetails?.color || 'Unknown'
-    };
-
-    // Emit ride acceptance with additional details
-    socket.emit('driverAcceptRide', {
-      rideId: ride._id,
-      driverId: driver._id || driver.id,
-      driverName: driver.fullName || driver.name,
-      driverPhone: driver.mobileNo || driver.phone,
-      driverPhoto: driver.profileImage || null,
-      driverRating: driver.rating || 0,
-      vehicleDetails,
-      currentLocation: userLocation,
-      timestamp: new Date().toISOString()
-    });
-
-    // Optimistically update UI
-    setActiveRide(ride);
-    setRideRequests([]);
-    
-    // Start sending location updates
-    startLocationUpdates(ride._id);
-    
-    // Show success notification
-    setNotificationToast({
-      type: 'success',
-      message: 'Ride accepted! Starting navigation...'
-    });
-  };
-
-  const declineRide = (rideId) => {
-    console.log('[DriverDashboard] Declining ride:', rideId);
-    setRideRequests((prev) => prev.filter(r => r._id !== rideId));
   };
 
   // Geolocation: always track driver location
@@ -360,6 +407,12 @@ const DriverDashboard = () => {
   
   const closeProfile = () => {
     setShowProfile(false);
+  };
+
+  // Add declineRide function
+  const declineRide = (rideId) => {
+    console.log('[DriverDashboard] Declining ride:', rideId);
+    setRideRequests((prev) => prev.filter(r => r._id !== rideId));
   };
 
   // If loading
